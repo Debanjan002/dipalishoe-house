@@ -25,7 +25,39 @@ export const InventoryProvider = ({ children }) => {
     } else {
       // Initialize with sample data
       const sampleProducts = [
-       
+        {
+          id: '1',
+          name: 'Bata Men\'s Formal Black Leather Shoes',
+          barcode: 'BATA001',
+          price: 2499,
+          stock: 15,
+          category: 'Men\'s Formal',
+          description: 'Premium black leather formal shoes',
+          size: '8',
+          brand: 'Bata'
+        },
+        {
+          id: '2',
+          name: 'Nike Air Max Running Shoes',
+          barcode: 'NIKE001',
+          price: 4999,
+          stock: 8,
+          category: 'Sports',
+          description: 'Comfortable running shoes with air cushioning',
+          size: '9',
+          brand: 'Nike'
+        },
+        {
+          id: '3',
+          name: 'Woodland Casual Brown Shoes',
+          barcode: 'WOOD001',
+          price: 3299,
+          stock: 12,
+          category: 'Men\'s Casual',
+          description: 'Genuine leather casual shoes',
+          size: '7',
+          brand: 'Woodland'
+        }
       ];
       setProducts(sampleProducts);
       localStorage.setItem('pos_products', JSON.stringify(sampleProducts));

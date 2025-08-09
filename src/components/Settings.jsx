@@ -177,7 +177,7 @@ const Settings = () => {
 
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
-                    GST/Tax Rate (%)
+                    GST/Tax Rate (%) *
                   </label>
                   <input
                     type="number"
@@ -188,9 +188,10 @@ const Settings = () => {
                     onChange={(e) => setTempShopSettings({...tempShopSettings, taxRate: parseFloat(e.target.value)})}
                     className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                     placeholder="18"
+                    required
                   />
                   <p className="text-xs text-gray-500 mt-1">
-                    Enter total tax rate (e.g., 18 for 18% GST which will be split as 9% CGST + 9% SGST)
+                    Enter total GST rate (e.g., 18 for 18% GST = 9% CGST + 9% SGST). This will apply to all sales.
                   </p>
                 </div>
 

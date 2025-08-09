@@ -93,7 +93,7 @@ const Reports = () => {
       ...filteredSales.map(sale => [
         new Date(sale.timestamp).toLocaleString(),
         sale.id,
-        sale.items.map(item => `₹{item.name} (₹{item.quantity})`).join('; '),
+        sale.items.map(item => `${item.name} (${item.quantity})`).join('; '),
         sale.subtotal.toFixed(2),
         sale.tax.toFixed(2),
         sale.total.toFixed(2),
@@ -106,7 +106,7 @@ const Reports = () => {
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `sales-report-₹{dateRange}.csv`;
+    a.download = `sales-report-${dateRange}.csv`;
     a.click();
     window.URL.revokeObjectURL(url);
   };
@@ -152,7 +152,7 @@ const Reports = () => {
           <div className="flex items-center justify-between">
             <div>
               <p className="text-sm font-medium text-gray-600">Total Revenue</p>
-              <p className="text-2xl font-bold text-green-600">₹{totalRevenue.toFixed(2)}</p>
+              <p className="text-2xl font-bold text-green-600">${totalRevenue.toFixed(2)}</p>
             </div>
             <div className="w-12 h-12 bg-green-100 rounded-lg flex items-center justify-center">
               <DollarSign className="w-6 h-6 text-green-600" />
@@ -176,7 +176,7 @@ const Reports = () => {
           <div className="flex items-center justify-between">
             <div>
               <p className="text-sm font-medium text-gray-600">Avg. Transaction</p>
-              <p className="text-2xl font-bold text-purple-600">₹{averageTransactionValue.toFixed(2)}</p>
+              <p className="text-2xl font-bold text-purple-600">${averageTransactionValue.toFixed(2)}</p>
             </div>
             <div className="w-12 h-12 bg-purple-100 rounded-lg flex items-center justify-center">
               <TrendingUp className="w-6 h-6 text-purple-600" />
@@ -188,7 +188,7 @@ const Reports = () => {
           <div className="flex items-center justify-between">
             <div>
               <p className="text-sm font-medium text-gray-600">Total Tax</p>
-              <p className="text-2xl font-bold text-orange-600">₹{totalTax.toFixed(2)}</p>
+              <p className="text-2xl font-bold text-orange-600">${totalTax.toFixed(2)}</p>
             </div>
             <div className="w-12 h-12 bg-orange-100 rounded-lg flex items-center justify-center">
               <Calendar className="w-6 h-6 text-orange-600" />
@@ -213,7 +213,7 @@ const Reports = () => {
                     <p className="text-sm text-gray-600">{product.quantity} units sold</p>
                   </div>
                   <div className="text-right">
-                    <p className="font-medium text-green-600">₹{product.revenue.toFixed(2)}</p>
+                    <p className="font-medium text-green-600">${product.revenue.toFixed(2)}</p>
                   </div>
                 </div>
               ))
@@ -244,7 +244,7 @@ const Reports = () => {
                   </p>
                 </div>
                 <div className="text-right">
-                  <p className="font-medium text-green-600">₹{sale.total.toFixed(2)}</p>
+                  <p className="font-medium text-green-600">${sale.total.toFixed(2)}</p>
                   <p className="text-xs text-gray-600">{sale.items.length} items</p>
                 </div>
               </div>
@@ -267,7 +267,7 @@ const Reports = () => {
             {dailySalesData.map((day, index) => (
               <div key={index} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
                 <span className="text-sm font-medium text-gray-900">{day.date}</span>
-                <span className="font-bold text-green-600">₹{day.total.toFixed(2)}</span>
+                <span className="font-bold text-green-600">${day.total.toFixed(2)}</span>
               </div>
             ))}
           </div>

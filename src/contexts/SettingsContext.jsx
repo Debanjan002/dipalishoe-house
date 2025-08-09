@@ -12,13 +12,13 @@ export const useSettings = () => {
 
 export const SettingsProvider = ({ children }) => {
   const [shopSettings, setShopSettings] = useState({
-    name: 'Dipali Shoe House',
-    address: 'Muksudpur Bazar ,Kharagpur 2, Paschim Medinipur, 721126, West Bengal, India',
-    phone: '+91 6296329245',
-    email: 'sudiphui02@gmail.com',
+    name: 'Sharma Shoe Palace',
+    address: 'Shop No. 15, Gandhi Market, Connaught Place, New Delhi - 110001',
+    phone: '+91 98765 43210',
+    email: 'info@sharmashoes.com',
     logo: '',
     taxRate: 18.0,
-    gstNumber: ''
+    gstNumber: '07AABCS1234F1Z5'
   });
 
   const [printerSettings, setPrinterSettings] = useState({
