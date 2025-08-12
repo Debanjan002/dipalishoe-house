@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useInventory } from '../contexts/InventoryContext';
 import { useSettings } from '../contexts/SettingsContext';
 import { useAuth } from '../contexts/AuthContext';
+
 import { 
   Search, 
   Plus, 
@@ -292,137 +293,187 @@ const POS = () => {
     
     const receiptHTML = `
       <!DOCTYPE html>
-      <html>
-      <head>
-        <meta charset="UTF-8">
-        <title>Sale Receipt</title>
-        <style>
-          body { 
-            font-family: 'Inter', 'Roboto', Arial, sans-serif; 
-            font-size: 8px; 
-            margin: 0; 
-            padding: 5px; 
-            width: 40mm;
-            line-height: 1.3;
-            color: #000;
-          }
-          .center { text-align: center; }
-          .left { text-align: left; }
-          .right { text-align: right; }
-          .bold { font-weight: bold; }
-          .header { 
-            font-size: 12px; 
-            font-weight: bold; 
-            margin-bottom: 3px;
-            background: linear-gradient(135deg, #3B82F6, #1E40AF);
-            color: white;
-            padding: 5px;
-            border-radius: 3px;
-          }
-          .sub-header { font-size: 7px; margin-bottom: 2px; }
-          .line { border-bottom: 1px dashed #000; margin: 3px 0; }
-          .double-line { border-bottom: 2px solid #000; margin: 3px 0; }
-          table { width: 100%; font-size: 7px; border-collapse: collapse; }
-          th, td { padding: 1px 2px; vertical-align: top; }
-          .total-section { margin-top: 5px; padding-top: 3px; border-top: 1px solid #000; }
-          .discount-text { color: #10B981; font-style: italic; }
-          .gst-breakdown { font-size: 6px; color: #555; }
-          .footer { font-size: 7px; margin-top: 5px; }
-        </style>
-      </head>
-      <body>
-        <div class="center">
-          <div class="header">${shopSettings.name}</div>
-          <div class="sub-header">${shopSettings.address}</div>
-          <div class="sub-header">Ph: ${shopSettings.phone}</div>
-          <div class="sub-header">Email: ${shopSettings.email}</div>
-          ${shopSettings.gstNumber ? `<div class="sub-header">GSTIN: ${shopSettings.gstNumber}</div>` : ''}
-          <div class="line"></div>
-          <div class="bold">SALE RECEIPT</div>
-        </div>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <title>SALE RECEIPT</title>
+  <style>
+    /* PAGE */
+    @page { size: 50mm auto; margin: 0; }
+    @media print {
+      html, body { width: 50mm; }
+      .no-break { page-break-inside: avoid; }
+    }
 
-        <div class="left sub-header">
-          <div>Bill No: ${sale.id}</div>
-          <div>Date: ${new Date(sale.timestamp).toLocaleString('en-IN')}</div>
-          <div>Cashier: ${sale.cashier}</div>
-        </div>
-        <div class="line"></div>
+    /* BASE */
+    html, body {
+      margin: 0;                 /* no margins anywhere */
+      padding: 0;
+      width: 45mm;
+      background: #fff;
+      color: #000;
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial, "Noto Sans", sans-serif;
+      font-size: 10px;           /* clearer on 50mm heads */
+      line-height: 1.25;
+      font-weight: 500;          /* all bold */
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+      word-break: break-word;
+    }
 
-        <table>
-          <thead>
-            <tr>
-              <th style="text-align: left; width: 50%;">Item</th>
-              <th style="text-align: center; width: 15%;">Qty</th>
-              <th style="text-align: right; width: 17%;">Rate</th>
-              <th style="text-align: right; width: 18%;">Amt</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${sale.items.map(item => `
-              <tr>
-                <td class="sub-header">${item.name}${item.size ? ` (${item.size})` : ''}</td>
-                <td class="center sub-header">${item.quantity}</td>
-                <td class="right sub-header">₹${item.price.toFixed(2)}</td>
-                <td class="right sub-header">₹${(item.price * item.quantity).toFixed(2)}</td>
-              </tr>
-              ${item.discount > 0 ? `
-                <tr>
-                  <td colspan="3" class="sub-header discount-text">Discount (${item.discountType === 'percentage' ? item.discount + '%' : '₹' + item.discount})</td>
-                  <td class="right sub-header discount-text">-₹${((item.price * item.quantity) - (item.finalPrice * item.quantity)).toFixed(2)}</td>
-                </tr>
-              ` : ''}
-            `).join('')}
-          </tbody>
-        </table>
-        <div class="line"></div>
+    /* bottom breathing room only */
+    .bottom-space { padding-bottom: 8mm; }
 
-        <div class="total-section">
-          <table>
-            <tr>
-              <td class="sub-header">Subtotal:</td>
-              <td class="right sub-header">₹${sale.subtotal.toFixed(2)}</td>
-            </tr>
-            ${sale.totalDiscount > 0 ? `
-              <tr>
-                <td class="sub-header">Total Discount:</td>
-                <td class="right sub-header discount-text">-₹${sale.totalDiscount.toFixed(2)}</td>
-              </tr>
-            ` : ''}
-            <tr>
-              <td class="sub-header">After Discount:</td>
-              <td class="right sub-header">₹${sale.afterDiscount.toFixed(2)}</td>
-            </tr>
-            <tr class="gst-breakdown">
-              <td class="sub-header">CGST (${(shopSettings.taxRate / 2)}%):</td>
-              <td class="right sub-header">₹${sale.cgst.toFixed(2)}</td>
-            </tr>
-            <tr class="gst-breakdown">
-              <td class="sub-header">SGST (${(shopSettings.taxRate / 2)}%):</td>
-              <td class="right sub-header">₹${sale.sgst.toFixed(2)}</td>
-            </tr>
-            <tr class="double-line">
-              <td class="bold">TOTAL:</td>
-              <td class="right bold">₹${sale.total.toFixed(2)}</td>
-            </tr>
-            <tr>
-              <td class="sub-header">Paid (${sale.paymentMethod}):</td>
-              <td class="right sub-header">₹${sale.amountPaid.toFixed(2)}</td>
-            </tr>
-            <tr>
-              <td class="sub-header">Change:</td>
-              <td class="right sub-header">₹${sale.change.toFixed(2)}</td>
-            </tr>
-          </table>
-        </div>
-        <div class="line"></div>
+    /* HELPERS */
+    .center { text-align: center; }
+    .left   { text-align: left; }
+    .right  { text-align: right; }
+    .mono   { font-variant-numeric: tabular-nums; }
 
-        <div class="center footer">
-          <div>Thank you for shopping!</div>
-          <div>Visit again soon!</div>
-          <div class="sub-header">Powered by Sharma POS System</div>
-        </div>
-      </body>
-      </html>
+    /* HEADER */
+    .header {
+      font-size: 13px;
+      letter-spacing: 0.2px;
+      padding-top: 2px;          /* no left/right padding */
+      text-transform: uppercase;
+    }
+    .sub { font-size: 9px; letter-spacing: 0.2px; }
+
+    /* RULES */
+    .rule       { border-bottom: 1px solid #000; margin: 4px 0; }
+    .rule-thick { border-bottom: 2px solid #000; margin: 4px 0; }
+
+    /* TABLE */
+    table { border-collapse: collapse; width: 100%; table-layout: fixed; }
+    th, td { padding: 1px 0; vertical-align: top; }
+
+    
+
+    /* Column widths tuned for 50mm roll */
+    .col-item { width: 40%; }
+    .col-qty  { width: 12%; }
+    .col-rate { width: 24%; }
+    .col-amt  { width: 24%; }
+
+    th { font-size: 9px; text-transform: uppercase; }
+
+    /* TOTALS emphasis */
+    .emph-row td { font-size: 12px; }   /* one size bigger for key lines */
+    .key-label { text-transform: uppercase; }
+  </style>
+</head>
+<body class="bottom-space">
+  <!-- HEADER -->
+<div class="center">
+  <div class="header">
+  ${shopSettings.name}
+  </div>
+    <div class="sub">${shopSettings.address}</div>
+    <div class="sub">Ph: ${shopSettings.phone}</div>
+    <div class="sub">Email: ${shopSettings.email}</div>
+    ${shopSettings.gstNumber ? `<div class="sub">GSTIN: ${shopSettings.gstNumber}</div>` : ''}
+    <div class="rule"></div>
+    <div>SALE RECEIPT</div>
+  </div>
+</div>
+  <!-- META -->
+  <div class="sub">
+    <div>Bill No: ${sale.id}</div>
+    <div>Date: ${new Date(sale.timestamp).toLocaleString('en-IN')}</div>
+    <div>Cashier: ${sale.cashier}</div>
+  </div>
+  <div class="rule"></div>
+
+  <!-- ITEMS -->
+  <table>
+    <thead>
+      <tr>
+        <th class="left  col-item">Item</th>
+        <th class="center col-qty">Qty</th>
+        <th class="right col-rate">Rate</th>
+        <th class="right col-amt">Amt</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${sale.items.map(item => `
+        <tr class="no-break">
+          <td class="left  col-item sub nowrap">
+            ${item.name}${item.size ? ` (${item.size})` : ''}
+          </td>
+          <td class="center col-qty sub mono nowrap">${item.quantity}</td>
+          <td class="right col-rate sub mono nowrap">₹${item.price.toFixed(2)}</td>
+          <td class="right col-amt  sub mono nowrap">₹${(item.price * item.quantity).toFixed(2)}</td>
+        </tr>
+        ${item.discount > 0 ? `
+          <tr class="no-break">
+            <td colspan="3" class="left sub nowrap">Discount (${item.discountType === 'percentage' ? item.discount + '%' : '₹' + item.discount})</td>
+            <td class="right sub mono nowrap">-₹${((item.price * item.quantity) - (item.finalPrice * item.quantity)).toFixed(2)}</td>
+          </tr>
+        ` : ''}
+      `).join('')}
+    </tbody>
+  </table>
+
+  <div class="rule"></div>
+
+  <!-- TOTALS -->
+  <table>
+    <tr>
+      <td class="left sub">Subtotal</td>
+      <td class="right sub mono">₹${sale.subtotal.toFixed(2)}</td>
+    </tr>
+    ${sale.totalDiscount > 0 ? `
+      <tr>
+        <td class="left sub">Total Discount</td>
+        <td class="right sub mono">-₹${sale.totalDiscount.toFixed(2)}</td>
+      </tr>
+    ` : ''}
+    <tr>
+      <td class="left sub">After Discount</td>
+      <td class="right sub mono">₹${sale.afterDiscount.toFixed(2)}</td>
+    </tr>
+    <tr>
+      <td class="left sub">CGST (${(shopSettings.taxRate / 2)}%)</td>
+      <td class="right sub mono">₹${sale.cgst.toFixed(2)}</td>
+    </tr>
+    <tr>
+      <td class="left sub">SGST (${(shopSettings.taxRate / 2)}%)</td>
+      <td class="right sub mono">₹${sale.sgst.toFixed(2)}</td>
+    </tr>
+
+    <tr class="rule-thick"></tr>
+
+    <tr class="emph-row">
+      <td class="left key-label">Total</td>
+      <td class="right mono">₹${sale.total.toFixed(2)}</td>
+    </tr>
+    <tr class="emph-row">
+      <td class="left">Paid (${sale.paymentMethod})</td>
+      <td class="right mono">₹${sale.amountPaid.toFixed(2)}</td>
+    </tr>
+    <tr class="emph-row">
+      <td class="left">Change</td>
+      <td class="right mono">₹${sale.change.toFixed(2)}</td>
+    </tr>
+  </table>
+
+  <div class="rule"></div>
+<div class="center">
+  <img src="${shopSettings.logo}" alt="Shop Logo" style="max-width: 40mm; height: auto; display: block; margin: 0 auto 5px auto; border-radius: 3px;" />
+  </div>
+  <div class="center">!!SCAN & PAY!!</div>
+  <!-- FOOTER -->
+  <div class="center sub no-break">
+    <div>Thank you for shopping!</div>
+    <div>Visit again soon!</div>
+    <div>Powered by Dipali Shoe House</div>
+    <h1>卐</h1>
+    <h1>ॐ</h1>
+    
+  </div>
+
+</body>
+</html>
     `;
 
     printWindow.document.write(receiptHTML);
