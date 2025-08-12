@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Return Receipt - 40mm Thermal Printer</title>
+    <style>
+        /* 40mm Thermal Printer Optimized Styles */
+        body { 
+            font-family: 'Inter', 'Roboto', Arial, sans-serif; 
+            font-size: 8px; 
+            margin: 0; 
+            padding: 5px; 
+            width: 40mm;
+            line-height: 1.3;
+            color: #000;
+            background: white;
+        }
+        
+        .center { text-align: center; }
+        .left { text-align: left; }
+        .right { text-align: right; }
+        .bold { font-weight: bold; }
+        
+        .line { 
+            border-bottom: 1px dashed #000; 
+            margin: 3px 0; 
+        }
+        
+        .double-line {
+            border-bottom: 2px solid #000;
+            margin: 3px 0;
+        }
+        
+        table { 
+            width: 100%; 
+            font-size: 7px;
+            border-collapse: collapse;
+        }
+        
+        th, td {
+            padding: 1px 2px;
+            vertical-align: top;
+        }
+        
+        .header { 
+            font-size: 12px; 
+            font-weight: bold; 
+            margin-bottom: 3px;
+            background: linear-gradient(135deg, #F59E0B, #D97706);
+            color: white;
+            padding: 5px;
+            border-radius: 3px;
+        }
+        
+        .sub-header {
+            font-size: 7px;
+            margin-bottom: 2px;
+        }
+        
+        .footer { 
+            font-size: 7px; 
+            margin-top: 5px;
+        }
+        
+        .footer-image { 
+            text-align: center; 
+            margin: 5px 0; 
+        }
+        
+        .small { font-size: 6px; }
+        .medium { font-size: 8px; }
+        .large { font-size: 10px; }
+        
+        .item-row {
+            border-bottom: 1px dotted #ccc;
+        }
+        
+        .total-section {
+            margin-top: 5px;
+            padding-top: 3px;
+            border-top: 1px solid #000;
+        }
+        
+        .return-text {
+            color: #F59E0B;
+            font-weight: bold;
+        }
+        
+        /* Print specific styles */
+        @media print {
+            body {
+                width: 40mm;
+                margin: 0;
+                padding: 2px;
+            }
+            
+            .no-print {
+                display: none;
+            }
+        }
+        
+        /* Responsive font sizes for different paper widths */
+        @media (max-width: 45mm) {
+            body { font-size: 7px; }
+            .header { font-size: 10px; }
+            table { font-size: 6px; }
+        }
+        
+        @media (min-width: 58mm) {
+            body { 
+                font-size: 9px; 
+                width: 58mm;
+            }
+            .header { font-size: 14px; }
+            table { font-size: 8px; }
+        }
+        
+        @media (min-width: 80mm) {
+            body { 
+                font-size: 10px; 
+                width: 80mm;
+                padding: 8px;
+            }
+            .header { font-size: 16px; }
+            table { font-size: 9px; }
+        }
+    </style>
+</head>
+<body>
+    <!-- Shop Header -->
+    <div class="center">
+        <div class="header" id="shop-name">SHARMA SHOE PALACE</div>
+        <div class="sub-header" id="shop-address">Shop No. 15, Gandhi Market<br>Connaught Place, New Delhi - 110001</div>
+        <div class="sub-header" id="shop-contact">Ph: +91 98765 43210</div>
+        <div class="sub-header" id="shop-email">Email: info@sharmashoes.com</div>
+        <div class="sub-header" id="shop-gst">GSTIN: 07AABCS1234F1Z5</div>
+        <div class="line"></div>
+        <div class="bold large return-text">RETURN RECEIPT</div>
+    </div>
+
+    <!-- Return Details -->
+    <div class="left sub-header">
+        <div>Return No: <span id="return-number">RET123456</span></div>
+        <div>Original Sale: <span id="original-sale">INV123456</span></div>
+        <div>Date: <span id="return-date">01/01/2024 12:00 PM</span></div>
+        <div>Processed by: <span id="processed-by">Admin</span></div>
+        <div>Reason: <span id="return-reason">Defective Product</span></div>
+    </div>
+    <div class="line"></div>
+
+    <!-- Items Table -->
+    <table>
+        <thead>
+            <tr>
+                <th style="text-align: left; width: 50%;">Item</th>
+                <th style="text-align: center; width: 15%;">Qty</th>
+                <th style="text-align: right; width: 17%;">Rate</th>
+                <th style="text-align: right; width: 18%;">Refund</th>
+            </tr>
+        </thead>
+        <tbody id="items-list">
+            <!-- Items will be populated here -->
+        </tbody>
+    </table>
+    <div class="line"></div>
+
+    <!-- Totals Section -->
+    <div class="total-section">
+        <table>
+            <tr class="double-line">
+                <td class="medium bold return-text">TOTAL REFUND:</td>
+                <td class="right medium bold return-text" id="total-refund">₹0.00</td>
+            </tr>
+        </table>
+    </div>
+    <div class="line"></div>
+
+    <!-- Custom Message -->
+    <div class="center footer" id="custom-message">
+        Return processed successfully
+    </div>
+
+    <!-- Footer Image -->
+    <div class="footer-image" id="footer-image-container" style="display: none;">
+        <img id="footer-image" src="" style="width: 30px; height: 15px;" />
+    </div>
+
+    <!-- Footer Text -->
+    <div class="center">
+        <div class="footer" id="footer-text">Thank you for your understanding</div>
+        <div class="footer">Visit again soon!</div>
+        <div class="small">Powered by Sharma POS System</div>
+    </div>
+
+    <!-- JavaScript for dynamic content -->
+    <script>
+        // Functions to update receipt content dynamically
+        
+        function updateShopDetails(shopData) {
+            document.getElementById('shop-name').textContent = shopData.name || 'SHARMA SHOE PALACE';
+            document.getElementById('shop-address').innerHTML = shopData.address || 'Shop Address';
+            document.getElementById('shop-contact').textContent = `Ph: ${shopData.phone || '+91 98765 43210'}`;
+            document.getElementById('shop-email').textContent = `Email: ${shopData.email || 'info@sharmashoes.com'}`;
+            if (shopData.gstNumber) {
+                document.getElementById('shop-gst').textContent = `GSTIN: ${shopData.gstNumber}`;
+            }
+        }
+        
+        function updateReturnDetails(returnData) {
+            document.getElementById('return-number').textContent = returnData.returnNumber || 'RET123456';
+            document.getElementById('original-sale').textContent = returnData.originalSale || 'INV123456';
+            document.getElementById('return-date').textContent = returnData.date || new Date().toLocaleString('en-IN');
+            document.getElementById('processed-by').textContent = returnData.processedBy || 'Admin';
+            document.getElementById('return-reason').textContent = returnData.reason || 'Customer Request';
+        }
+        
+        function updateItems(items) {
+            const itemsList = document.getElementById('items-list');
+            itemsList.innerHTML = '';
+            
+            items.forEach(item => {
+                const row = document.createElement('tr');
+                row.className = 'item-row';
+                row.innerHTML = `
+                    <td class="sub-header">${item.name}${item.size ? ` (${item.size})` : ''}</td>
+                    <td class="center sub-header">${item.returnQuantity}</td>
+                    <td class="right sub-header">₹${item.finalPrice.toFixed(2)}</td>
+                    <td class="right sub-header">₹${(item.finalPrice * item.returnQuantity).toFixed(2)}</td>
+                `;
+                itemsList.appendChild(row);
+            });
+        }
+        
+        function updateTotalRefund(totalRefund) {
+            document.getElementById('total-refund').textContent = `₹${totalRefund.toFixed(2)}`;
+        }
+        
+        function updateFooter(footerData) {
+            if (footerData.customMessage) {
+                document.getElementById('custom-message').textContent = footerData.customMessage;
+            }
+            
+            if (footerData.footerText) {
+                document.getElementById('footer-text').textContent = footerData.footerText;
+            }
+            
+            if (footerData.footerImage) {
+                const container = document.getElementById('footer-image-container');
+                const img = document.getElementById('footer-image');
+                container.style.display = 'block';
+                container.style.textAlign = footerData.imagePosition || 'center';
+                img.src = footerData.footerImage;
+                img.style.width = `${footerData.imageWidth || 30}px`;
+                img.style.height = `${footerData.imageHeight || 15}px`;
+            }
+        }
+        
+        // Font customization
+        function updateFontSettings(fontSettings) {
+            if (fontSettings.fontFamily) {
+                document.body.style.fontFamily = fontSettings.fontFamily;
+            }
+            if (fontSettings.fontSize) {
+                document.body.style.fontSize = fontSettings.fontSize;
+            }
+            if (fontSettings.headerFontSize) {
+                document.querySelectorAll('.header').forEach(el => {
+                    el.style.fontSize = fontSettings.headerFontSize;
+                });
+            }
+            if (fontSettings.footerFontSize) {
+                document.querySelectorAll('.footer').forEach(el => {
+                    el.style.fontSize = fontSettings.footerFontSize;
+                });
+            }
+        }
+        
+        // Print function
+        function printReceipt() {
+            window.print();
+        }
+    </script>
+</body>
+</html>
