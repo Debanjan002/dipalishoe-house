@@ -580,102 +580,150 @@ const POS = () => {
     
     const receiptHTML = `
       <!DOCTYPE html>
-      <html>
-      <head>
-        <meta charset="UTF-8">
-        <title>Return Receipt</title>
-        <style>
-          body { 
-            font-family: 'Inter', 'Roboto', Arial, sans-serif; 
-            font-size: 8px; 
-            margin: 0; 
-            padding: 5px; 
-            width: 40mm;
-            line-height: 1.3;
-            color: #000;
-          }
-          .center { text-align: center; }
-          .left { text-align: left; }
-          .right { text-align: right; }
-          .bold { font-weight: bold; }
-          .header { 
-            font-size: 12px; 
-            font-weight: bold; 
-            margin-bottom: 3px;
-            background: linear-gradient(135deg, #F59E0B, #D97706);
-            color: white;
-            padding: 5px;
-            border-radius: 3px;
-          }
-          .sub-header { font-size: 7px; margin-bottom: 2px; }
-          .line { border-bottom: 1px dashed #000; margin: 3px 0; }
-          .double-line { border-bottom: 2px solid #000; margin: 3px 0; }
-          table { width: 100%; font-size: 7px; border-collapse: collapse; }
-          th, td { padding: 1px 2px; vertical-align: top; }
-          .total-section { margin-top: 5px; padding-top: 3px; border-top: 1px solid #000; }
-          .return-text { color: #F59E0B; font-weight: bold; }
-          .footer { font-size: 7px; margin-top: 5px; }
-        </style>
-      </head>
-      <body>
-        <div class="center">
-          <div class="header">${shopSettings.name}</div>
-          <div class="sub-header">${shopSettings.address}</div>
-          <div class="sub-header">Ph: ${shopSettings.phone}</div>
-          <div class="sub-header">Email: ${shopSettings.email}</div>
-          ${shopSettings.gstNumber ? `<div class="sub-header">GSTIN: ${shopSettings.gstNumber}</div>` : ''}
-          <div class="line"></div>
-          <div class="bold return-text">RETURN RECEIPT</div>
-        </div>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <title>Return Receipt</title>
+  <style>
+    /* PAGE */
+    @page { size: 50mm auto; margin: 0; }
+    @media print {
+      html, body { width: 50mm; }
+      .no-break { page-break-inside: avoid; }
+    }
 
-        <div class="left sub-header">
-          <div>Return No: ${returnTransaction.id}</div>
-          <div>Original Sale: ${returnTransaction.originalSaleId}</div>
-          <div>Date: ${new Date(returnTransaction.timestamp).toLocaleString('en-IN')}</div>
-          <div>Processed by: ${returnTransaction.processedBy}</div>
-          <div>Reason: ${returnTransaction.reason}</div>
-        </div>
-        <div class="line"></div>
+    /* BASE */
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 45mm;
+      background: #fff;
+      color: #000;
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial, "Noto Sans", sans-serif;
+      font-size: 10px;
+      line-height: 1.25;
+      font-weight: 500;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+      word-break: break-word;
+    }
 
-        <table>
-          <thead>
-            <tr>
-              <th style="text-align: left; width: 50%;">Item</th>
-              <th style="text-align: center; width: 15%;">Qty</th>
-              <th style="text-align: right; width: 17%;">Rate</th>
-              <th style="text-align: right; width: 18%;">Refund</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${returnTransaction.items.map(item => `
-              <tr>
-                <td class="sub-header">${item.name}${item.size ? ` (${item.size})` : ''}</td>
-                <td class="center sub-header">${item.returnQuantity}</td>
-                <td class="right sub-header">₹${item.finalPrice.toFixed(2)}</td>
-                <td class="right sub-header">₹${(item.finalPrice * item.returnQuantity).toFixed(2)}</td>
-              </tr>
-            `).join('')}
-          </tbody>
-        </table>
-        <div class="line"></div>
+    /* bottom breathing room only */
+    .bottom-space { padding-bottom: 8mm; }
 
-        <div class="total-section">
-          <table>
-            <tr class="double-line">
-              <td class="bold return-text">TOTAL REFUND:</td>
-              <td class="right bold return-text">₹${returnTransaction.totalRefund.toFixed(2)}</td>
-            </tr>
-          </table>
-        </div>
-        <div class="line"></div>
+    /* HELPERS */
+    .center { text-align: center; }
+    .left   { text-align: left; }
+    .right  { text-align: right; }
+    .mono   { font-variant-numeric: tabular-nums; }
+    .bold   { font-weight: 700; }
 
-        <div class="center footer">
-          <div>Return processed successfully</div>
-          <div>Thank you for your understanding</div>
-          <div class="sub-header">Powered by Sharma POS System</div>
-        </div>
-      </body>
-      </html>
+    /* HEADER */
+    .header {
+      font-size: 13px;
+      letter-spacing: 0.2px;
+      padding: 2px 0;
+      text-transform: uppercase;
+      font-weight: 700;
+      color: black;
+      border-radius: 3px;
+      margin-bottom: 4px;
+    }
+    .sub { font-size: 9px; letter-spacing: 0.2px; }
+    .sub-header { font-size: 9px; margin-bottom: 2px; }
+
+    /* RULES */
+    .rule       { border-bottom: 1px dashed #000; margin: 4px 0; }
+    .rule-thick { border-bottom: 2px solid #000; margin: 6px 0; }
+
+    /* TABLE */
+    table { border-collapse: collapse; width: 100%; table-layout: fixed; }
+    th, td { padding: 1px 0; vertical-align: top; }
+    th { font-size: 9px; font-weight: 700; text-transform: uppercase; }
+
+    /* Column widths tuned for 50mm roll */
+    .col-item   { width: 48%; }
+    .col-qty    { width: 15%; text-align: center; }
+    .col-rate   { width: 18%; text-align: right; }
+    .col-refund { width: 19%; text-align: right; }
+
+    /* TOTALS emphasis */
+    .emph-row td { font-size: 12px; font-weight: 700; } 
+    .return-text { color: #000000ff; font-weight: 700; }
+
+    /* FOOTER */
+    .footer { font-size: 9px; margin-top: 6px; text-align: center; }
+  </style>
+</head>
+<body class="bottom-space">
+  <!-- HEADER -->
+  <div class="center">
+    <div class="header">${shopSettings.name}</div>
+    <div class="sub">${shopSettings.address}</div>
+    <div class="sub">Ph: ${shopSettings.phone}</div>
+    <div class="sub">Email: ${shopSettings.email}</div>
+    ${shopSettings.gstNumber ? `<div class="sub">GSTIN: ${shopSettings.gstNumber}</div>` : ''}
+    <div class="rule"></div>
+    <div class="return-text bold">RETURN RECEIPT</div>
+  </div>
+
+  <!-- META -->
+  <div class="sub">
+    <div>Return No: ${returnTransaction.id}</div>
+    <div>Original Sale: ${returnTransaction.originalSaleId}</div>
+    <div>Date: ${new Date(returnTransaction.timestamp).toLocaleString('en-IN')}</div>
+    <div>Processed by: ${returnTransaction.processedBy}</div>
+    <div>Reason: ${returnTransaction.reason}</div>
+  </div>
+  <div class="rule"></div>
+
+  <!-- ITEMS -->
+  <table>
+    <thead>
+      <tr>
+        <th class="col-item left">Item</th>
+        <th class="col-qty center">Qty</th>
+        <th class="col-rate right">Rate</th>
+        <th class="col-refund right">Refund</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${returnTransaction.items.map(item => `
+        <tr class="no-break">
+          <td class="left sub nowrap">${item.name}${item.size ? ` (${item.size})` : ''}</td>
+          <td class="center sub mono nowrap">${item.returnQuantity}</td>
+          <td class="right sub mono nowrap">₹${item.finalPrice.toFixed(2)}</td>
+          <td class="right sub mono nowrap">₹${(item.finalPrice * item.returnQuantity).toFixed(2)}</td>
+        </tr>
+      `).join('')}
+    </tbody>
+  </table>
+
+  <div class="rule"></div>
+
+  <!-- TOTALS -->
+  <table>
+    <tr class="emph-row">
+      <td class="left return-text">Total Refund:</td>
+      <td class="right mono return-text">₹${returnTransaction.totalRefund.toFixed(2)}</td>
+    </tr>
+  </table>
+
+  <div class="rule"></div>
+
+  <!-- FOOTER -->
+  <div class="center footer">
+    <div>Return processed successfully</div>
+    <div>Thank you for your understanding</div>
+    <div class="sub">Powered by Dipali shoe house</div>
+    <h1>卐</h1>
+    <h1>ॐ</h1>
+  </div>
+
+   
+</body>
+</html>
+
     `;
 
     printWindow.document.write(receiptHTML);
