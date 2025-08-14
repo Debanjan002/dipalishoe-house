@@ -467,6 +467,7 @@ const POS = () => {
     <div>Thank you for shopping!</div>
     <div>Visit again soon!</div>
     <div>Powered by Dipali Shoe House</div>
+    <h4>Exchange policy: 3 days with bill</h4>
     <h1>卐</h1>
     <h1>ॐ</h1>
     
