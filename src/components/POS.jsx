@@ -371,7 +371,7 @@ const POS = () => {
     <div class="sub">${shopSettings.address}</div>
     <div class="sub">Ph: ${shopSettings.phone}</div>
     <div class="sub">Email: ${shopSettings.email}</div>
-    ${shopSettings.gstNumber ? `<div class="sub">GSTIN: ${shopSettings.gstNumber}</div>` : ''}
+    ${shopSettings.gstNumber ? `<div class="sub">RETURN POLICY: ${shopSettings.gstNumber}</div>` : ''}
     <div class="rule"></div>
     <div>SALE RECEIPT</div>
   </div>
