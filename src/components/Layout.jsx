@@ -53,9 +53,8 @@ const Layout = ({ children, currentView, setCurrentView }) => {
               <Store className="w-6 h-6 text-white" />
             </div>
             <div>
-              <h1 className="font-bold text-gray-900">DIPALI SHOE HOUSE POS System</h1>
+              <h1 className="font-bold text-gray-900">DIPALI SHOE HOUSE</h1>
               <p className="text-sm text-gray-500 capitalize">{user?.name}</p>
-              <p className="text-sm text-gray-500 capitalize">MAINTAINED BY DEBANJAN PAN</p>
             </div>
           </div>
           <button
@@ -109,6 +108,7 @@ const Layout = ({ children, currentView, setCurrentView }) => {
             <LogOut className="w-4 h-4" />
             Sign Out
           </button>
+          <p className="text-sm text-gray-500 capitalize">BY Debanjan Pan</p>
         </div>
       </div>
 
