@@ -224,13 +224,13 @@ const Reports = () => {
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
           <h1 className="text-2xl font-bold text-gray-900">Sales Reports</h1>
 
-          <div className="w-full sm:w-auto flex flex-col gap-3">
+          <div className="w-full flex-col sm:w-auto flex  gap-3">
             {/* Presets */}
             <div className="flex flex-wrap gap-3">
               <select
                 value={dateRange}
                 onChange={(e) => setDateRange(e.target.value)}
-                className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                className="px-4 py-2 hover:bg-purple-200 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                 aria-label="Quick date range"
               >
                 <option value="today">Today</option>
@@ -243,7 +243,7 @@ const Reports = () => {
 
               <button
                 onClick={loadData}
-                className="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors flex items-center gap-2"
+                className="px-4 py-2 border border-gray-300 hover:bg-yellow-400 rounded-lg hover:bg-gray-50 transition-colors flex items-center gap-2"
               >
                 <RefreshCw className="w-4 h-4" />
                 Refresh
@@ -258,8 +258,8 @@ const Reports = () => {
             </div>
 
             {/* Manual calendar range (always visible) */}
-            <div className="flex flex-wrap items-center gap-3">
-              <div className="flex items-center gap-2">
+            <div className="flex flex-wrap  items-center gap-3">
+              <div className="flex items-center border-2 px-2  py-2 border-blue-500 hover:bg-blue-400 rounded-xl gap-2">
                 <label className="text-sm text-gray-700">Start:</label>
                 <input
                   type="date"
@@ -268,7 +268,7 @@ const Reports = () => {
                   className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
                 />
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center border-2 px-2  py-2 rounded-xl border-green-600 hover:bg-green-400 gap-2">
                 <label className="text-sm text-gray-700">End:</label>
                 <input
                   type="date"
@@ -279,13 +279,10 @@ const Reports = () => {
               </div>
               <button
                 onClick={clearManualDates}
-                className="px-3 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
+                className="px-3 py-2 border bg-red-200 border-black-400 rounded-lg hover:bg-red-600"
               >
                 Clear Dates
               </button>
-              <span className="text-xs text-gray-500">
-                Tip: Setting either date overrides the preset above.
-              </span>
             </div>
           </div>
         </div>
@@ -369,12 +366,12 @@ const Reports = () => {
         </div>
 
         {/* Recent Transactions */}
-        <div className="bg-white rounded-xl shadow-sm p-6">
+        <div className="bg-white rounded-xl  shadow-sm p-6">
           <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
             <BarChart3 className="w-5 h-5 text-blue-600" />
             Recent Transactions
           </h2>
-          <div className="space-y-3 max-h-80 overflow-y-auto">
+          <div className="space-y-3 max-h-80  overflow-y-auto">
             {filteredSales.slice(-10).reverse().map((sale) => (
               <div
                 key={sale.id}
@@ -382,7 +379,7 @@ const Reports = () => {
                 tabIndex={0}
                 onClick={() => handleOpenDetails(sale)}
                 onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') handleOpenDetails(sale); }}
-                className="flex items-center justify-between p-3 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="flex items-center justify-between p-3 hover:bg-green-400 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer focus:outline-none focus:ring-2 focus:ring-blue-500"
               >
                 <div>
                   <p className="text-sm font-medium text-gray-900">

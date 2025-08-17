@@ -1219,12 +1219,12 @@ const POS = () => {
               {!selectedSaleForReturn ? (
                 <div>
                   <h3 className="text-lg font-medium mb-4">Select Sale to Return</h3>
-                  <div className="space-y-3 max-h-96 overflow-y-auto">
+                  <div className="space-y-3  max-h-96 overflow-y-auto">
                     {recentSales.map((sale) => (
                       <div
                         key={sale.id}
                         onClick={() => selectSaleForReturn(sale)}
-                        className="p-4 border border-gray-200 rounded-lg hover:border-blue-300 hover:shadow-md transition-all cursor-pointer"
+                        className="p-4 border border-gray-200 rounded-lg hover:bg-red-200 hover:border-blue-300 hover:shadow-md transition-all cursor-pointer"
                       >
                         <div className="flex justify-between items-start mb-2">
                           <div>
