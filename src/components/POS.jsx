@@ -18,7 +18,8 @@ import {
   DollarSign,
   Calendar,
   Printer,
-  X
+  X,
+  ListChecks
 } from 'lucide-react';
 
 const POS = () => {
@@ -30,17 +31,32 @@ const POS = () => {
   const [cart, setCart] = useState([]);
   const [showDirectBill, setShowDirectBill] = useState(false);
   const [showReturns, setShowReturns] = useState(false);
+
+  // NEW: Dues modal
+  const [showDues, setShowDues] = useState(false);
+
   const [showDiscountModal, setShowDiscountModal] = useState(false);
   const [selectedItemForDiscount, setSelectedItemForDiscount] = useState(null);
   const [discountType, setDiscountType] = useState('percentage');
   const [discountValue, setDiscountValue] = useState('');
+
   const [paymentMethod, setPaymentMethod] = useState('cash');
-  const [amountPaid, setAmountPaid] = useState('');
+  const [amountPaid, setAmountPaid] = useState('')
+
+  // NEW: DUE -> customer name
+  const [customerName, setCustomerName] = useState('');
+
   const [recentSales, setRecentSales] = useState([]);
   const [selectedSaleForReturn, setSelectedSaleForReturn] = useState(null);
   const [returnItems, setReturnItems] = useState([]);
   const [returnReason, setReturnReason] = useState('');
-  
+
+  // NEW: dues in state for modal
+  const [dues, setDues] = useState([]);
+
+  // NEW: per-due collection input values (id -> string amount)
+  const [collectionInputs, setCollectionInputs] = useState({});
+
   const [directBillForm, setDirectBillForm] = useState({
     name: '',
     price: '',
@@ -49,15 +65,20 @@ const POS = () => {
     size: ''
   });
 
+  // EXTENDED: stats now include due + collections + total
   const [todayStats, setTodayStats] = useState({
     sales: 0,
     returns: 0,
     netSales: 0,
-    monthlySales: 0
+    monthlySales: 0,
+    dueToday: 0,
+    dueCollectionsToday: 0,
+    todayTotal: 0
   });
 
   useEffect(() => {
     loadRecentSales();
+    loadDues();
     calculateTodayStats();
   }, []);
 
@@ -67,10 +88,21 @@ const POS = () => {
     setRecentSales(sortedSales.slice(0, 20));
   };
 
+  const loadDues = () => {
+    const stored = JSON.parse(localStorage.getItem('pos_dues') || '[]');
+    const list = stored.filter(d => !d.settled).sort((a,b) => new Date(b.createdAt) - new Date(a.createdAt));
+    setDues(list);
+    // initialize inputs with default = current balance
+    const inputs = {};
+    list.forEach(d => { inputs[d.id] = (d.balance ?? 0).toString(); });
+    setCollectionInputs(inputs);
+  };
+
   const calculateTodayStats = () => {
     const sales = JSON.parse(localStorage.getItem('pos_sales') || '[]');
     const returns = JSON.parse(localStorage.getItem('pos_returns') || '[]');
-    
+    const duePayments = JSON.parse(localStorage.getItem('pos_due_payments') || '[]');
+
     const today = new Date().toDateString();
     const currentMonth = new Date().getMonth();
     const currentYear = new Date().getFullYear();
@@ -97,11 +129,27 @@ const POS = () => {
       })
       .reduce((sum, returnItem) => sum + returnItem.totalRefund, 0);
 
+    // NEW: dues created today (unpaid portion for sales made today with DUE)
+    const dueToday = sales
+      .filter(sale => new Date(sale.timestamp).toDateString() === today && sale.paymentMethod === 'DUE')
+      .reduce((sum, sale) => sum + Math.max(0, (sale.total - (sale.amountPaid || 0))), 0);
+
+    // NEW: dues collected today (payments made later)
+    const dueCollectionsToday = duePayments
+      .filter(p => new Date(p.timestamp).toDateString() === today)
+      .reduce((sum, p) => sum + p.amount, 0);
+
+    // NEW: today's total = your original definition (kept as-is)
+    const todayTotal = todaySales;
+
     setTodayStats({
       sales: todaySales,
       returns: todayReturns,
-      netSales: todaySales - todayReturns,
-      monthlySales: monthlySales - monthlyReturns
+      netSales: todaySales,
+      monthlySales: monthlySales - monthlyReturns,
+      dueToday,
+      dueCollectionsToday,
+      todayTotal
     });
   };
 
@@ -226,6 +274,19 @@ const POS = () => {
     };
   };
 
+  // NEW: record due payment (collections)
+  const recordDueCollection = (dueId, amount) => {
+    const payments = JSON.parse(localStorage.getItem('pos_due_payments') || '[]');
+    payments.push({
+      id: `COL${Date.now()}`,
+      dueId,
+      amount,
+      timestamp: new Date().toISOString(),
+      cashier: user.name
+    });
+    localStorage.setItem('pos_due_payments', JSON.stringify(payments));
+  };
+
   const processSale = () => {
     if (cart.length === 0) {
       alert('Cart is empty!');
@@ -233,10 +294,18 @@ const POS = () => {
     }
 
     const totals = calculateTotals();
-    const paidAmount = parseFloat(amountPaid) || totals.total;
+
+    // If DUE -> allow 0 or partial upfront; else default to full
+    const defaultPaid = paymentMethod === 'DUE' ? 0 : totals.total;
+    const paidAmount = parseFloat(amountPaid) || defaultPaid;
     
-    if (paidAmount < totals.total) {
+    if (paymentMethod !== 'DUE' && paidAmount < totals.total) {
       alert('Insufficient payment amount!');
+      return;
+    }
+
+    if (paymentMethod === 'DUE' && !customerName.trim()) {
+      alert('Please enter customer name for DUE.');
       return;
     }
 
@@ -255,9 +324,11 @@ const POS = () => {
       sgst: totals.sgst,
       total: totals.total,
       paymentMethod,
-      amountPaid: paidAmount,
-      change: paidAmount - totals.total,
-      cashier: user.name
+      amountPaid: Math.min(paidAmount, totals.total),
+      change: Math.max(0, paidAmount - totals.total),
+      cashier: user.name,
+      // helpful for referencing from dues
+      customerName: paymentMethod === 'DUE' ? customerName.trim() : undefined
     };
 
     // Update stock for inventory items
@@ -275,14 +346,37 @@ const POS = () => {
     sales.push(sale);
     localStorage.setItem('pos_sales', JSON.stringify(sales));
 
+    // If DUE: create a due record for remaining balance
+    if (paymentMethod === 'DUE') {
+      const remaining = Math.max(0, totals.total - sale.amountPaid);
+      if (remaining > 0) {
+        const allDues = JSON.parse(localStorage.getItem('pos_dues') || '[]');
+        const due = {
+          id: `DUE${Date.now()}`,
+          saleId: sale.id,
+          customerName: customerName.trim(),
+          total: totals.total,
+          upfrontPaid: sale.amountPaid,
+          balance: remaining,
+          createdAt: sale.timestamp,
+          settled: false,
+          payments: [] // later collections
+        };
+        allDues.push(due);
+        localStorage.setItem('pos_dues', JSON.stringify(allDues));
+      }
+    }
+
     // Print receipt
     printSaleReceipt(sale);
 
     // Reset
     setCart([]);
     setAmountPaid('');
+    setCustomerName('');
     setPaymentMethod('cash');
     loadRecentSales();
+    loadDues();
     calculateTodayStats();
     
     alert('Sale completed successfully!');
@@ -298,185 +392,103 @@ const POS = () => {
   <meta charset="UTF-8" />
   <title>SALE RECEIPT</title>
   <style>
-    /* PAGE */
     @page { size: 50mm auto; margin: 0; }
-    @media print {
-      html, body { width: 50mm; }
-      .no-break { page-break-inside: avoid; }
-    }
-
-    /* BASE */
+    @media print { html, body { width: 50mm; } .no-break { page-break-inside: avoid; } }
     html, body {
-      margin: 0;                 /* no margins anywhere */
-      padding: 0;
-      width: 45mm;
-      background: #fff;
-      color: #000;
+      margin: 0; padding: 0; width: 45mm; background: #fff; color: #000;
       font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial, "Noto Sans", sans-serif;
-      font-size: 10px;           /* clearer on 50mm heads */
-      line-height: 1.25;
-      font-weight: 500;          /* all bold */
-      -webkit-print-color-adjust: exact;
-      print-color-adjust: exact;
-      word-break: break-word;
+      font-size: 10px; line-height: 1.25; font-weight: 500;
+      -webkit-print-color-adjust: exact; print-color-adjust: exact; word-break: break-word;
     }
-
-    /* bottom breathing room only */
     .bottom-space { padding-bottom: 8mm; }
-
-    /* HELPERS */
-    .center { text-align: center; }
-    .left   { text-align: left; }
-    .right  { text-align: right; }
-    .mono   { font-variant-numeric: tabular-nums; }
-
-    /* HEADER */
-    .header {
-      font-size: 13px;
-      letter-spacing: 0.2px;
-      padding-top: 2px;          /* no left/right padding */
-      text-transform: uppercase;
-    }
+    .center { text-align: center; } .left { text-align: left; } .right { text-align: right; } .mono { font-variant-numeric: tabular-nums; }
+    .header { font-size: 13px; letter-spacing: 0.2px; padding-top: 2px; text-transform: uppercase; }
     .sub { font-size: 9px; letter-spacing: 0.2px; }
-
-    /* RULES */
-    .rule       { border-bottom: 1px solid #000; margin: 4px 0; }
+    .rule { border-bottom: 1px solid #000; margin: 4px 0; }
     .rule-thick { border-bottom: 2px solid #000; margin: 4px 0; }
-
-    /* TABLE */
     table { border-collapse: collapse; width: 100%; table-layout: fixed; }
     th, td { padding: 1px 0; vertical-align: top; }
-
-    
-
-    /* Column widths tuned for 50mm roll */
-    .col-item { width: 40%; }
-    .col-qty  { width: 12%; }
-    .col-rate { width: 24%; }
-    .col-amt  { width: 24%; }
-
+    .col-item { width: 40%; } .col-qty { width: 12%; } .col-rate { width: 24%; } .col-amt { width: 24%; }
     th { font-size: 9px; text-transform: uppercase; }
-
-    /* TOTALS emphasis */
-    .emph-row td { font-size: 12px; }   /* one size bigger for key lines */
+    .emph-row td { font-size: 12px; }
     .key-label { text-transform: uppercase; }
   </style>
 </head>
 <body class="bottom-space">
-  <!-- HEADER -->
 <div class="center">
-  <div class="header">
-  ${shopSettings.name}
-  </div>
-    <div class="sub">${shopSettings.address}</div>
-    <div class="sub">Ph: ${shopSettings.phone}</div>
-    <div class="sub">Email: ${shopSettings.email}</div>
-    ${shopSettings.gstNumber ? `<div class="sub">RETURN POLICY: ${shopSettings.gstNumber}</div>` : ''}
-    <div class="rule"></div>
-    <div>SALE RECEIPT</div>
-  </div>
+  <div class="header">${shopSettings.name}</div>
+  <div class="sub">${shopSettings.address}</div>
+  <div class="sub">Ph: ${shopSettings.phone}</div>
+  <div class="sub">Email: ${shopSettings.email}</div>
+  ${shopSettings.gstNumber ? `<div class="sub">RETURN POLICY: ${shopSettings.gstNumber}</div>` : ''}
+  <div class="rule"></div>
+  <div>SALE RECEIPT</div>
 </div>
-  <!-- META -->
-  <div class="sub">
-    <div>Bill No: ${sale.id}</div>
-    <div>Date: ${new Date(sale.timestamp).toLocaleString('en-IN')}</div>
-    <div>Cashier: ${sale.cashier}</div>
-  </div>
-  <div class="rule"></div>
 
-  <!-- ITEMS -->
-  <table>
-    <thead>
-      <tr>
-        <th class="left  col-item">Item</th>
-        <th class="center col-qty">Qty</th>
-        <th class="right col-rate">Rate</th>
-        <th class="right col-amt">Amt</th>
+<div class="sub">
+  <div>Bill No: ${sale.id}</div>
+  <div>Date: ${new Date(sale.timestamp).toLocaleString('en-IN')}</div>
+  <div>Cashier: ${sale.cashier}</div>
+  ${sale.paymentMethod === 'DUE' ? `<div>Customer: ${sale.customerName || ''}</div>` : ''}
+</div>
+<div class="rule"></div>
+
+<table>
+  <thead>
+    <tr>
+      <th class="left  col-item">Item</th>
+      <th class="center col-qty">Qty</th>
+      <th class="right col-rate">Rate</th>
+      <th class="right col-amt">Amt</th>
+    </tr>
+  </thead>
+  <tbody>
+    ${sale.items.map(item => `
+      <tr class="no-break">
+        <td class="left  col-item sub nowrap">${item.name}${item.size ? ` (${item.size})` : ''}</td>
+        <td class="center col-qty sub mono nowrap">${item.quantity}</td>
+        <td class="right col-rate sub mono nowrap">₹${item.price.toFixed(2)}</td>
+        <td class="right col-amt  sub mono nowrap">₹${(item.price * item.quantity).toFixed(2)}</td>
       </tr>
-    </thead>
-    <tbody>
-      ${sale.items.map(item => `
+      ${item.discount > 0 ? `
         <tr class="no-break">
-          <td class="left  col-item sub nowrap">
-            ${item.name}${item.size ? ` (${item.size})` : ''}
-          </td>
-          <td class="center col-qty sub mono nowrap">${item.quantity}</td>
-          <td class="right col-rate sub mono nowrap">₹${item.price.toFixed(2)}</td>
-          <td class="right col-amt  sub mono nowrap">₹${(item.price * item.quantity).toFixed(2)}</td>
-        </tr>
-        ${item.discount > 0 ? `
-          <tr class="no-break">
-            <td colspan="3" class="left sub nowrap">Discount (${item.discountType === 'percentage' ? item.discount + '%' : '₹' + item.discount})</td>
-            <td class="right sub mono nowrap">-₹${((item.price * item.quantity) - (item.finalPrice * item.quantity)).toFixed(2)}</td>
-          </tr>
-        ` : ''}
-      `).join('')}
-    </tbody>
-  </table>
+          <td colspan="3" class="left sub nowrap">Discount (${item.discountType === 'percentage' ? item.discount + '%' : '₹' + item.discount})</td>
+          <td class="right sub mono nowrap">-₹${((item.price * item.quantity) - (item.finalPrice * item.quantity)).toFixed(2)}</td>
+        </tr>` : '' }
+    `).join('')}
+  </tbody>
+</table>
 
-  <div class="rule"></div>
+<div class="rule"></div>
 
-  <!-- TOTALS -->
-  <table>
-    <tr>
-      <td class="left sub">Subtotal</td>
-      <td class="right sub mono">₹${sale.subtotal.toFixed(2)}</td>
-    </tr>
-    ${sale.totalDiscount > 0 ? `
-      <tr>
-        <td class="left sub">Total Discount</td>
-        <td class="right sub mono">-₹${sale.totalDiscount.toFixed(2)}</td>
-      </tr>
-    ` : ''}
-    <tr>
-      <td class="left sub">After Discount</td>
-      <td class="right sub mono">₹${sale.afterDiscount.toFixed(2)}</td>
-    </tr>
-    <tr>
-      <td class="left sub">CGST (${(shopSettings.taxRate / 2)}%)</td>
-      <td class="right sub mono">₹${sale.cgst.toFixed(2)}</td>
-    </tr>
-    <tr>
-      <td class="left sub">SGST (${(shopSettings.taxRate / 2)}%)</td>
-      <td class="right sub mono">₹${sale.sgst.toFixed(2)}</td>
-    </tr>
+<table>
+  <tr><td class="left sub">Subtotal</td><td class="right sub mono">₹${sale.subtotal.toFixed(2)}</td></tr>
+  ${sale.totalDiscount > 0 ? `<tr><td class="left sub">Total Discount</td><td class="right sub mono">-₹${sale.totalDiscount.toFixed(2)}</td></tr>` : ''}
+  <tr><td class="left sub">After Discount</td><td class="right sub mono">₹${sale.afterDiscount.toFixed(2)}</td></tr>
+  <tr><td class="left sub">CGST (${(shopSettings.taxRate / 2)}%)</td><td class="right sub mono">₹${sale.cgst.toFixed(2)}</td></tr>
+  <tr><td class="left sub">SGST (${(shopSettings.taxRate / 2)}%)</td><td class="right sub mono">₹${sale.sgst.toFixed(2)}</td></tr>
+  <tr class="rule-thick"></tr>
+  <tr class="emph-row"><td class="left key-label">Total</td><td class="right mono">₹${sale.total.toFixed(2)}</td></tr>
+  <tr class="emph-row"><td class="left">Paid (${sale.paymentMethod})</td><td class="right mono">₹${sale.amountPaid.toFixed(2)}</td></tr>
+  <tr class="emph-row"><td class="left">${sale.paymentMethod === 'DUE' ? 'Balance' : 'Change'}</td><td class="right mono">₹${(sale.paymentMethod === 'DUE' ? Math.max(0, sale.total - sale.amountPaid) : sale.change).toFixed(2)}</td></tr>
+</table>
 
-    <tr class="rule-thick"></tr>
-
-    <tr class="emph-row">
-      <td class="left key-label">Total</td>
-      <td class="right mono">₹${sale.total.toFixed(2)}</td>
-    </tr>
-    <tr class="emph-row">
-      <td class="left">Paid (${sale.paymentMethod})</td>
-      <td class="right mono">₹${sale.amountPaid.toFixed(2)}</td>
-    </tr>
-    <tr class="emph-row">
-      <td class="left">Change</td>
-      <td class="right mono">₹${sale.change.toFixed(2)}</td>
-    </tr>
-  </table>
-
-  <div class="rule"></div>
+<div class="rule"></div>
 <div class="center">
   <img src="${shopSettings.logo}" alt="Shop Logo" style="max-width: 40mm; height: auto; display: block; margin: 0 auto 5px auto; border-radius: 3px;" />
-  </div>
-  <div class="center">!!SCAN & PAY!!</div>
-  <!-- FOOTER -->
-  <div class="center sub no-break">
-    <div>Thank you for shopping!</div>
-    <div>Visit again soon!</div>
-    <div>Powered by Dipali Shoe House</div>
-    <h4>Exchange policy: 3 days with bill</h4>
-    <h1>卐</h1>
-    <h1>ॐ</h1>
-    
-  </div>
+</div>
+<div class="center">!!SCAN & PAY!!</div>
+<div class="center sub no-break">
+  <div>Thank you for shopping!</div>
+  <div>Visit again soon!</div>
+  <div>Powered by Dipali Shoe House</div>
+  <h4>Exchange policy: 3 days with bill</h4>
+  <h1>卐</h1>
+  <h1>ॐ</h1>
+</div>
 
 </body>
-</html>
-    `;
-
+</html>`;
     printWindow.document.write(receiptHTML);
     printWindow.document.close();
     printWindow.focus();
@@ -562,7 +574,6 @@ const POS = () => {
       }
     });
 
-    // Print return receipt
     printReturnReceipt(returnTransaction);
 
     // Reset
@@ -586,78 +597,31 @@ const POS = () => {
   <meta charset="UTF-8" />
   <title>Return Receipt</title>
   <style>
-    /* PAGE */
     @page { size: 50mm auto; margin: 0; }
-    @media print {
-      html, body { width: 50mm; }
-      .no-break { page-break-inside: avoid; }
-    }
-
-    /* BASE */
+    @media print { html, body { width: 50mm; } .no-break { page-break-inside: avoid; } }
     html, body {
-      margin: 0;
-      padding: 0;
-      width: 45mm;
-      background: #fff;
-      color: #000;
+      margin: 0; padding: 0; width: 45mm; background: #fff; color: #000;
       font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial, "Noto Sans", sans-serif;
-      font-size: 10px;
-      line-height: 1.25;
-      font-weight: 500;
-      -webkit-print-color-adjust: exact;
-      print-color-adjust: exact;
-      word-break: break-word;
+      font-size: 10px; line-height: 1.25; font-weight: 500;
+      -webkit-print-color-adjust: exact; print-color-adjust: exact; word-break: break-word;
     }
-
-    /* bottom breathing room only */
     .bottom-space { padding-bottom: 8mm; }
-
-    /* HELPERS */
-    .center { text-align: center; }
-    .left   { text-align: left; }
-    .right  { text-align: right; }
-    .mono   { font-variant-numeric: tabular-nums; }
-    .bold   { font-weight: 700; }
-
-    /* HEADER */
-    .header {
-      font-size: 13px;
-      letter-spacing: 0.2px;
-      padding: 2px 0;
-      text-transform: uppercase;
-      font-weight: 700;
-      color: black;
-      border-radius: 3px;
-      margin-bottom: 4px;
-    }
+    .center { text-align: center; } .left { text-align: left; } .right { text-align: right; } .mono { font-variant-numeric: tabular-nums; } .bold { font-weight: 700; }
+    .header { font-size: 13px; letter-spacing: 0.2px; padding: 2px 0; text-transform: uppercase; font-weight: 700; color: black; border-radius: 3px; margin-bottom: 4px; }
     .sub { font-size: 9px; letter-spacing: 0.2px; }
     .sub-header { font-size: 9px; margin-bottom: 2px; }
-
-    /* RULES */
-    .rule       { border-bottom: 1px dashed #000; margin: 4px 0; }
+    .rule { border-bottom: 1px dashed #000; margin: 4px 0; }
     .rule-thick { border-bottom: 2px solid #000; margin: 6px 0; }
-
-    /* TABLE */
     table { border-collapse: collapse; width: 100%; table-layout: fixed; }
     th, td { padding: 1px 0; vertical-align: top; }
     th { font-size: 9px; font-weight: 700; text-transform: uppercase; }
-
-    /* Column widths tuned for 50mm roll */
-    .col-item   { width: 48%; }
-    .col-qty    { width: 15%; text-align: center; }
-    .col-rate   { width: 18%; text-align: right; }
-    .col-refund { width: 19%; text-align: right; }
-
-    /* TOTALS emphasis */
+    .col-item { width: 48%; } .col-qty { width: 15%; text-align: center; } .col-rate { width: 18%; text-align: right; } .col-refund { width: 19%; text-align: right; }
     .emph-row td { font-size: 12px; font-weight: 700; } 
     .return-text { color: #000000ff; font-weight: 700; }
-
-    /* FOOTER */
     .footer { font-size: 9px; margin-top: 6px; text-align: center; }
   </style>
 </head>
 <body class="bottom-space">
-  <!-- HEADER -->
   <div class="center">
     <div class="header">${shopSettings.name}</div>
     <div class="sub">${shopSettings.address}</div>
@@ -668,7 +632,6 @@ const POS = () => {
     <div class="return-text bold">RETURN RECEIPT</div>
   </div>
 
-  <!-- META -->
   <div class="sub">
     <div>Return No: ${returnTransaction.id}</div>
     <div>Original Sale: ${returnTransaction.originalSaleId}</div>
@@ -678,7 +641,6 @@ const POS = () => {
   </div>
   <div class="rule"></div>
 
-  <!-- ITEMS -->
   <table>
     <thead>
       <tr>
@@ -702,7 +664,6 @@ const POS = () => {
 
   <div class="rule"></div>
 
-  <!-- TOTALS -->
   <table>
     <tr class="emph-row">
       <td class="left return-text">Total Refund:</td>
@@ -712,7 +673,6 @@ const POS = () => {
 
   <div class="rule"></div>
 
-  <!-- FOOTER -->
   <div class="center footer">
     <div>Return processed successfully</div>
     <div>Thank you for your understanding</div>
@@ -720,13 +680,8 @@ const POS = () => {
     <h1>卐</h1>
     <h1>ॐ</h1>
   </div>
-
-   
 </body>
-</html>
-
-    `;
-
+</html>`;
     printWindow.document.write(receiptHTML);
     printWindow.document.close();
     printWindow.focus();
@@ -754,12 +709,62 @@ const POS = () => {
     }));
   };
 
+  // NEW: core collector that supports partial or full collections
+  const collectDue = (due, amount) => {
+    const amt = parseFloat(amount);
+    if (isNaN(amt) || amt <= 0) {
+      alert('Invalid amount entered!');
+      return;
+    }
+    if (amt > due.balance) {
+      alert('Amount cannot exceed remaining balance!');
+      return;
+    }
+
+    // update due
+    const all = JSON.parse(localStorage.getItem('pos_dues') || '[]');
+    const updated = all.map(d => {
+      if (d.id === due.id) {
+        const payment = {
+          id: `PAY${Date.now()}`,
+          amount: amt,
+          timestamp: new Date().toISOString(),
+          cashier: user.name
+        };
+        const newPayments = [...(d.payments || []), payment];
+        const newBalance = (d.balance || 0) - amt;
+        return { 
+          ...d, 
+          payments: newPayments, 
+          balance: newBalance, 
+          settled: newBalance <= 0, 
+          settledAt: newBalance <= 0 ? payment.timestamp : d.settledAt 
+        };
+      }
+      return d;
+    });
+    localStorage.setItem('pos_dues', JSON.stringify(updated));
+
+    // record collection for today's totals
+    recordDueCollection(due.id, amt);
+
+    loadDues();
+    calculateTodayStats();
+    alert(`Collected ₹${amt.toFixed(2)} from ${due.customerName}`);
+  };
+
+  // UPDATED: keep a convenience full-settle action
+  const settleDue = (due) => {
+    if (!window.confirm(`Mark ₹${due.balance.toFixed(2)} as PAID for ${due.customerName}?`)) return;
+    collectDue(due, due.balance);
+  };
+
   const totals = calculateTotals();
 
   return (
     <div className="space-y-6">
       {/* Dashboard Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div className="bg-gradient-to-r from-blue-500 to-blue-600 rounded-xl shadow-sm p-4 text-white">
           <div className="flex items-center justify-between">
             <div>
@@ -769,8 +774,31 @@ const POS = () => {
             <TrendingUp className="w-8 h-8 text-blue-200" />
           </div>
         </div>
+        <div className="bg-gradient-to-r from-emerald-500 to-emerald-600 rounded-xl shadow-sm p-4 text-white">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-emerald-100 text-sm">Collected from dues today: </p>
+              <p className="text-2xl font-bold">₹{todayStats.dueCollectionsToday.toFixed(2)}</p>
+            </div>
+            <DollarSign className="w-8 h-8 text-emerald-200" />
+          </div>
+        </div>
 
-        <div className="bg-gradient-to-r from-orange-500 to-orange-600 rounded-xl shadow-sm p-4 text-white">
+       
+      </div>
+
+      {/* NEW row with Today's Due + Today's Total */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="bg-gradient-to-r from-gray-500 to-gray-600 rounded-xl shadow-sm p-4 text-white">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-gray-100 text-sm">Today's Due (new)</p>
+              <p className="text-2xl font-bold">₹{todayStats.dueToday.toFixed(2)}</p>
+            </div>
+            <Banknote className="w-8 h-8 text-gray-200" />
+          </div>
+        </div>
+ <div className="bg-gradient-to-r from-orange-500 to-orange-600 rounded-xl shadow-sm p-4 text-white">
           <div className="flex items-center justify-between">
             <div>
               <p className="text-orange-100 text-sm">Today's Returns</p>
@@ -779,26 +807,7 @@ const POS = () => {
             <TrendingDown className="w-8 h-8 text-orange-200" />
           </div>
         </div>
-
-        <div className="bg-gradient-to-r from-green-500 to-green-600 rounded-xl shadow-sm p-4 text-white">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-green-100 text-sm">Net Today</p>
-              <p className="text-2xl font-bold">₹{todayStats.netSales.toFixed(2)}</p>
-            </div>
-            <DollarSign className="w-8 h-8 text-green-200" />
-          </div>
-        </div>
-
-        <div className="bg-gradient-to-r from-purple-500 to-purple-600 rounded-xl shadow-sm p-4 text-white">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-purple-100 text-sm">Monthly Net</p>
-              <p className="text-2xl font-bold">₹{todayStats.monthlySales.toFixed(2)}</p>
-            </div>
-            <Calendar className="w-8 h-8 text-purple-200" />
-          </div>
-        </div>
+        
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -831,6 +840,14 @@ const POS = () => {
                 >
                   <RotateCcw className="w-4 h-4" />
                   Returns
+                </button>
+                {/* NEW: Dues button */}
+                <button
+                  onClick={() => { loadDues(); setShowDues(true); }}
+                  className="px-4 py-3 bg-gray-700 text-white rounded-lg hover:bg-gray-800 transition-colors flex items-center gap-2 whitespace-nowrap"
+                >
+                  <ListChecks className="w-4 h-4" />
+                  Dues
                 </button>
               </div>
             </div>
@@ -971,7 +988,9 @@ const POS = () => {
                 {/* Payment */}
                 <div className="space-y-3 mt-4">
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Payment Method</label>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Payment Method
+                    </label>
                     <select
                       value={paymentMethod}
                       onChange={(e) => setPaymentMethod(e.target.value)}
@@ -980,15 +999,36 @@ const POS = () => {
                       <option value="cash">Cash</option>
                       <option value="card">Card</option>
                       <option value="upi">UPI</option>
-                      <option value="wallet">Digital Wallet</option>
+                      <option value="DUE">DUE</option>
                     </select>
                   </div>
 
+                  {/* Conditional Input for Due */}
+                  {paymentMethod === 'DUE' && (
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Customer Name
+                      </label>
+                      <input
+                        type="text"
+                        value={customerName}
+                        onChange={(e) => setCustomerName(e.target.value)}
+                        placeholder="Enter customer name"
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      />
+                      <p className="text-xs text-gray-500 mt-1">
+                        You can take partial upfront and collect the rest later.
+                      </p>
+                    </div>
+                  )}
+
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Amount Paid</label>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Amount Paid
+                    </label>
                     <input
                       type="number"
-                      step="0.01"
+                      step="1"
                       value={amountPaid}
                       onChange={(e) => setAmountPaid(e.target.value)}
                       placeholder={totals.total.toFixed(2)}
@@ -1121,8 +1161,7 @@ const POS = () => {
               <h2 className="text-xl font-semibold">Add Discount</h2>
               <button
                 onClick={() => setShowDiscountModal(false)}
-                className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
-              >
+                className="p-2 hover:bg-gray-100 rounded-lg transition-colors">
                 <X className="w-5 h-5" />
               </button>
             </div>
@@ -1196,7 +1235,7 @@ const POS = () => {
         </div>
       )}
 
-      {/* Returns Modal */}
+      {/* Returns Modal (unchanged aside from calls) */}
       {showReturns && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-xl shadow-xl max-w-4xl w-full max-h-90vh overflow-y-auto">
@@ -1352,6 +1391,94 @@ const POS = () => {
                   </div>
                 </div>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* NEW: Dues Modal with partial collection */}
+      {showDues && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          
+          <div className="bg-white rounded-xl shadow-xl max-w-3xl w-full max-h-[90vh] overflow-y-auto">
+            
+            <div className="flex items-center justify-between p-6 border-b">
+              <h2 className="text-xl font-semibold">Unpaid Dues</h2>
+              <button
+                onClick={() => setShowDues(false)}
+                className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-3">
+              {dues.length === 0 && (
+                <div className="text-center text-gray-500 py-8">No unpaid dues 🎉</div>
+              )}
+
+              {dues.map(due => (
+                <div key={due.id} className="p-4 border border-gray-200 rounded-lg">
+                  <div className="flex justify-between items-start">
+                    <div>
+                      <p className="font-semibold text-gray-900">{due.customerName}</p>
+                      <p className="text-sm text-gray-600">Sale: {due.saleId}</p>
+                      <p className="text-xs text-gray-500">
+                        Created: {new Date(due.createdAt).toLocaleString('en-IN')}
+                      </p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-sm">Total: <span className="font-semibold">₹{due.total.toFixed(2)}</span></p>
+                      <p className="text-sm">Upfront: ₹{(due.upfrontPaid || 0).toFixed(2)}</p>
+                      <p className="text-lg font-bold text-red-600">Balance: ₹{due.balance.toFixed(2)}</p>
+                    </div>
+                  </div>
+
+                  {due.payments && due.payments.length > 0 && (
+                    <div className="mt-2 text-xs text-gray-600">
+                      Collections: {due.payments.map(p => `₹${p.amount.toFixed(2)} on ${new Date(p.timestamp).toLocaleDateString('en-IN')}`).join(', ')}
+                    </div>
+                  )}
+
+                  <div className="mt-3 grid grid-cols-1 md:grid-cols-3 gap-3 items-end">
+                    
+                    <div className="md:col-span-1">
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Amount to collect (₹)
+                      </label>
+                      <p className="text-xs text-gray-700 mt-1">*Max: ₹{due.balance.toFixed(2)}</p>
+                      <input
+                        type="number"
+                        min="1"
+                        step="1"
+                        max={due.balance}
+                        value={collectionInputs[due.id] ?? ''}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setCollectionInputs(prev => ({ ...prev, [due.id]: v }));
+                        }}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
+                        placeholder={due.balance.toFixed(2)}
+                      />
+                      
+                    </div>
+
+                    <div className="flex gap-3 md:col-span-2">
+                      <button
+                        onClick={() => {
+                          const val = collectionInputs[due.id];
+                          collectDue(due, val);
+                        }}
+                        className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+                      >
+                        Collect
+
+                      </button>
+                      
+                    </div>
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
         </div>
