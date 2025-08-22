@@ -97,7 +97,7 @@ export const InventoryProvider = ({ children }) => {
   };
 
   const getLowStockProducts = () => {
-    return products.filter(p => p.stock <= 5);
+    return products.filter(p => p.stock <= 2);
   };
 
   const value = {

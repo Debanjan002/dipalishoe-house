@@ -866,9 +866,9 @@ const POS = () => {
                   <div className="flex justify-between items-center">
                     <span className="font-bold text-blue-600">₹{product.price.toFixed(2)}</span>
                     <span className={`text-xs px-2 py-1 rounded-full ${
-                      product.stock > 10 ? 'bg-green-100 text-green-800' :
-                      product.stock > 0 ? 'bg-yellow-100 text-yellow-800' :
-                      'bg-red-100 text-red-800'
+                      product.stock > 2 ? 'bg-green-300 text-black' :
+                      product.stock > 0 ? 'bg-yellow-300 text-black' :
+                      'bg-red-300 text-black'
                     }`}>
                       Stock: {product.stock}
                     </span>

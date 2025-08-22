@@ -199,7 +199,7 @@ const Inventory = () => {
               <div className="flex justify-between">
                 <span className="text-sm text-gray-600">Stock:</span>
                 <span className={`font-medium ${
-                  product.stock <= 5 ? 'text-red-600' : 'text-green-600'
+                  product.stock <= 2 ? 'text-red-600' : 'text-green-600'
                 }`}>
                   {product.stock}
                 </span>
