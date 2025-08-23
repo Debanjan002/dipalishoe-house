@@ -477,7 +477,7 @@ const POS = () => {
 <div class="center">
   <img src="${shopSettings.logo}" alt="Shop Logo" style="max-width: 40mm; height: auto; display: block; margin: 0 auto 5px auto; border-radius: 3px;" />
 </div>
-<div class="center">!!SCAN & PAY!!</div>
+<div class="center">!!SCAN TO select Your shoe Online!!</div>
 <div class="center sub no-break">
   <div>Thank you for shopping!</div>
   <div>Visit again soon!</div>
@@ -1430,7 +1430,7 @@ const POS = () => {
                     <div className="text-right">
                       <p className="text-sm">Total: <span className="font-semibold">₹{due.total.toFixed(2)}</span></p>
                       <p className="text-sm">Upfront: ₹{(due.upfrontPaid || 0).toFixed(2)}</p>
-                      <p className="text-lg font-bold text-red-600">Balance: ₹{due.balance.toFixed(2)}</p>
+                      <p className="text-lg font-bold text-red-600">Balance Due: ₹{due.balance.toFixed(2)}</p>
                     </div>
                   </div>
 
