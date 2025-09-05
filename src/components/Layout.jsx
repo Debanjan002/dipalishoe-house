@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { 
   Store, 
@@ -9,12 +9,35 @@ import {
   Users, 
   LogOut,
   Menu,
-  X
+  X,
+  ArrowUp
 } from 'lucide-react';
 
 const Layout = ({ children, currentView, setCurrentView }) => {
   const { user, logout } = useAuth();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  // --- Back to Top state + ref ---
+  const mainRef = useRef(null);
+  const [showBackToTop, setShowBackToTop] = useState(false);
+
+  useEffect(() => {
+    const el = mainRef.current;
+    if (!el) return;
+
+    const onScroll = () => {
+      setShowBackToTop(el.scrollTop > 200);
+    };
+
+    el.addEventListener('scroll', onScroll, { passive: true });
+    return () => el.removeEventListener('scroll', onScroll);
+  }, []);
+
+  const scrollToTop = () => {
+    if (mainRef.current) {
+      mainRef.current.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  };
 
   const menuItems = [
     { id: 'pos', label: 'POS', icon: ShoppingCart, roles: ['admin', 'cashier'] },
@@ -66,7 +89,7 @@ const Layout = ({ children, currentView, setCurrentView }) => {
         </div>
 
         <nav className="p-4">
-          <div className="space-y-2">
+          <div className="space-y-2 ">
             {filteredMenuItems.map((item) => (
               <button
                 key={item.id}
@@ -135,9 +158,21 @@ const Layout = ({ children, currentView, setCurrentView }) => {
         </header>
 
         {/* Page content */}
-        <main className="flex-1 p-6 overflow-auto">
+        <main ref={mainRef} className="flex-1 p-6 overflow-auto">
           {children}
         </main>
+
+        {/* Back to Top Button */}
+        {showBackToTop && (
+          <button
+            onClick={scrollToTop}
+            className="fixed bottom-6 right-6 z-50 p-3 rounded-full bg-blue-600 text-white shadow-lg hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            aria-label="Back to top"
+            title="Back to top"
+          >
+            <ArrowUp className="w-5 h-5" />
+          </button>
+        )}
       </div>
     </div>
   );
