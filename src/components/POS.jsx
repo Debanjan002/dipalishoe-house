@@ -1208,7 +1208,7 @@ const POS = () => {
                     Final Price: ₹{(() => {
                       const baseTotal = selectedItemForDiscount.price * selectedItemForDiscount.quantity;
                       const discount = parseFloat(discountValue) || 0;
-                      if (discountType === 'amount') {
+                      if (discountType === 'percentage') {
                         return (baseTotal - (baseTotal * discount / 100)).toFixed(2);
                       } else {
                         return Math.max(0, baseTotal - discount).toFixed(2);
