@@ -1179,8 +1179,9 @@ const POS = () => {
                   onChange={(e) => setDiscountType(e.target.value)}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                 >
-                  <option value="percentage">Percentage (%)</option>
                   <option value="amount">Fixed Amount (₹)</option>
+                  <option value="percentage">Percentage (%)</option>
+                  
                 </select>
               </div>
 
