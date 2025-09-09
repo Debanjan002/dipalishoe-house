@@ -929,18 +929,19 @@ const POS = () => {
                           setDiscountType(item.discountType);
                           setShowDiscountModal(true);
                         }}
-                        className="w-6 h-6 bg-blue-100 text-blue-600 rounded hover:bg-blue-200 flex items-center justify-center"
+                        className="w-20 h-10 bg-blue-100 text-blue-600 rounded hover:bg-blue-200 flex items-center justify-center"
                         title="Add Discount"
                       >
-                        <Percent className="w-7 h-7" />
+                      Discount
                       </button>
                       <button
                         onClick={() => removeFromCart(item.id)}
-                        className="w-6 h-6 bg-red-100 text-red-600 rounded hover:bg-red-200 flex items-center justify-center"
+                        className="w-10 h-10 bg-red-100 text-red-600 rounded hover:bg-red-200 flex items-center justify-center"
                       >
                         <Trash2 className="w-3 h-3" />
                       </button>
                     </div>
+                    
                   </div>
                 </div>
               ))}
@@ -1191,7 +1192,7 @@ const POS = () => {
                 </label>
                 <input
                   type="number"
-                  step="0.01"
+                  step="1"
                   min="0"
                   max={discountType === 'percentage' ? '100' : (selectedItemForDiscount.price * selectedItemForDiscount.quantity).toString()}
                   value={discountValue}
@@ -1207,7 +1208,7 @@ const POS = () => {
                     Final Price: ₹{(() => {
                       const baseTotal = selectedItemForDiscount.price * selectedItemForDiscount.quantity;
                       const discount = parseFloat(discountValue) || 0;
-                      if (discountType === 'percentage') {
+                      if (discountType === 'amount') {
                         return (baseTotal - (baseTotal * discount / 100)).toFixed(2);
                       } else {
                         return Math.max(0, baseTotal - discount).toFixed(2);
