@@ -932,7 +932,7 @@ const POS = () => {
                         className="w-6 h-6 bg-blue-100 text-blue-600 rounded hover:bg-blue-200 flex items-center justify-center"
                         title="Add Discount"
                       >
-                        <Percent className="w-3 h-3" />
+                        <Percent className="w-7 h-7" />
                       </button>
                       <button
                         onClick={() => removeFromCart(item.id)}
