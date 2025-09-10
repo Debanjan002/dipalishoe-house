@@ -37,7 +37,7 @@ const POS = () => {
 
   const [showDiscountModal, setShowDiscountModal] = useState(false);
   const [selectedItemForDiscount, setSelectedItemForDiscount] = useState(null);
-  const [discountType, setDiscountType] = useState('percentage');
+  const [discountType, setDiscountType] = useState('amount');
   const [discountValue, setDiscountValue] = useState('');
 
   const [paymentMethod, setPaymentMethod] = useState('cash');
@@ -173,7 +173,7 @@ const POS = () => {
       }
     } else {
       if (product.stock > 0) {
-        setCart([...cart, { ...product, quantity: 1, discount: 0, discountType: 'percentage' }]);
+        setCart([...cart, { ...product, quantity: 1, discount: 0, discountType: 'amount' }]);
       } else {
         alert('Product out of stock!');
       }
@@ -214,7 +214,7 @@ const POS = () => {
       category: 'Direct Bill',
       stock: 999,
       discount: 0,
-      discountType: 'percentage'
+      discountType: 'amount'
     };
     
     setCart([...cart, directItem]);
@@ -479,6 +479,7 @@ const POS = () => {
 </div>
 <div class="center">!!SCAN TO select Your shoe Online!!</div>
 <div class="center sub no-break">
+<div>𝓢𝓐𝓛𝓔 𝓢𝓣𝓐𝓡𝓣𝓘𝓝𝓖 𝓕𝓡𝓞𝓜 21 𝓢𝓔𝓟𝓣𝓔𝓜𝓑𝓔𝓡</div>
   <div>Thank you for shopping!</div>
   <div>Visit again soon!</div>
   <div>Powered by Dipali Shoe House</div>
