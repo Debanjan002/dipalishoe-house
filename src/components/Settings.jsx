@@ -44,7 +44,6 @@ const Settings = () => {
 
   const tabs = [
     { id: 'shop', label: 'Shop Details', icon: Store },
-    { id: 'printer', label: 'Printer Settings', icon: Printer },
     { id: 'data', label: 'Data Management', icon: SettingsIcon }
   ];
 
