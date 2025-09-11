@@ -3,20 +3,18 @@ import { useInventory } from '../contexts/InventoryContext';
 import { useSettings } from '../contexts/SettingsContext';
 import { useAuth } from '../contexts/AuthContext';
 
-import { 
-  Search, 
-  Plus, 
-  Minus, 
-  Trash2, 
-  ShoppingCart, 
-  CreditCard, 
+import {
+  Search,
+  Plus,
+  Minus,
+  Trash2,
+  ShoppingCart,
+  CreditCard,
   Banknote,
-  Percent,
   RotateCcw,
   TrendingUp,
   TrendingDown,
   DollarSign,
-  Calendar,
   Printer,
   X,
   ListChecks
@@ -26,13 +24,13 @@ const POS = () => {
   const { products, updateStock } = useInventory();
   const { shopSettings } = useSettings();
   const { user } = useAuth();
-  
+
   const [searchTerm, setSearchTerm] = useState('');
   const [cart, setCart] = useState([]);
   const [showDirectBill, setShowDirectBill] = useState(false);
   const [showReturns, setShowReturns] = useState(false);
 
-  // NEW: Dues modal
+  // Dues modal
   const [showDues, setShowDues] = useState(false);
 
   const [showDiscountModal, setShowDiscountModal] = useState(false);
@@ -40,10 +38,12 @@ const POS = () => {
   const [discountType, setDiscountType] = useState('amount');
   const [discountValue, setDiscountValue] = useState('');
 
-  const [paymentMethod, setPaymentMethod] = useState('cash');
-  const [amountPaid, setAmountPaid] = useState('')
+  // Two-step payment: first type (PAID or DUE), then mode (cash or upi)
+  const [payType, setPayType] = useState('PAID'); // 'PAID' | 'DUE'
+  const [payMode, setPayMode] = useState('cash'); // 'cash' | 'upi'
+  const [amountPaid, setAmountPaid] = useState('');
 
-  // NEW: DUE -> customer name
+  // DUE -> customer name
   const [customerName, setCustomerName] = useState('');
 
   const [recentSales, setRecentSales] = useState([]);
@@ -51,11 +51,15 @@ const POS = () => {
   const [returnItems, setReturnItems] = useState([]);
   const [returnReason, setReturnReason] = useState('');
 
-  // NEW: dues in state for modal
+  // dues in state for modal
   const [dues, setDues] = useState([]);
 
-  // NEW: per-due collection input values (id -> string amount)
+  // NEW: total due outstanding (till now)
+  const [outstandingDueTotal, setOutstandingDueTotal] = useState(0);
+
+  // per-due collection inputs & modes
   const [collectionInputs, setCollectionInputs] = useState({});
+  const [collectionModes, setCollectionModes] = useState({}); // { [dueId]: 'cash' | 'upi' }
 
   const [directBillForm, setDirectBillForm] = useState({
     name: '',
@@ -65,7 +69,7 @@ const POS = () => {
     size: ''
   });
 
-  // EXTENDED: stats now include due + collections + total
+  // Stats (unchanged logic)
   const [todayStats, setTodayStats] = useState({
     sales: 0,
     returns: 0,
@@ -76,26 +80,138 @@ const POS = () => {
     todayTotal: 0
   });
 
+  // Drawer (cash in drawer only)
+  const [drawer, setDrawer] = useState({ date: '', opening: 0, current: 0 });
+  const [showDrawerModal, setShowDrawerModal] = useState(false);
+  const [openingCashInput, setOpeningCashInput] = useState('');
+
+  // Daily tender totals
+  const [dailyTenders, setDailyTenders] = useState({ date: '', cash: 0, upi: 0 });
+
+  const todayStr = () => new Date().toISOString().slice(0, 10);
+
+  // ===== Drawer helpers =====
+  const saveDrawer = (d) => {
+    setDrawer(d);
+    localStorage.setItem('pos_drawer', JSON.stringify(d));
+  };
+
+  const loadDrawer = () => {
+    const stored = JSON.parse(localStorage.getItem('pos_drawer') || 'null');
+    if (!stored || stored.date !== todayStr()) {
+      setShowDrawerModal(true);
+    } else {
+      setDrawer(stored);
+    }
+  };
+
+  const updateDrawer = (delta) => {
+    const base = JSON.parse(localStorage.getItem('pos_drawer') || 'null');
+    const snapshot =
+      base && base.date === todayStr() ? base : { date: todayStr(), opening: 0, current: 0 };
+    const next = { ...snapshot, current: parseFloat((snapshot.current + delta).toFixed(2)) };
+    saveDrawer(next);
+  };
+
+  const submitOpeningCash = () => {
+    const amt = parseFloat(openingCashInput);
+    if (isNaN(amt) || amt < 0) {
+      alert('Please enter a valid non-negative amount.');
+      return;
+    }
+    const init = { date: todayStr(), opening: amt, current: amt };
+    saveDrawer(init);
+    setShowDrawerModal(false);
+  };
+
+  // ===== Daily tender helpers =====
+  const saveDailyTenders = (t) => {
+    setDailyTenders(t);
+    localStorage.setItem('pos_daily_tenders', JSON.stringify(t));
+  };
+
+  const loadDailyTenders = () => {
+    const stored = JSON.parse(localStorage.getItem('pos_daily_tenders') || 'null');
+    if (!stored || stored.date !== todayStr()) {
+      saveDailyTenders({ date: todayStr(), cash: 0, upi: 0 });
+    } else {
+      setDailyTenders(stored);
+    }
+  };
+
+  const bumpCashTotal = (delta) => {
+    const base = JSON.parse(localStorage.getItem('pos_daily_tenders') || 'null') || {
+      date: todayStr(),
+      cash: 0,
+      upi: 0
+    };
+    const snap = base.date === todayStr() ? base : { date: todayStr(), cash: 0, upi: 0 };
+    const next = { ...snap, cash: parseFloat((snap.cash + delta).toFixed(2)) };
+    saveDailyTenders(next);
+  };
+
+  const bumpUPITotal = (delta) => {
+    const base = JSON.parse(localStorage.getItem('pos_daily_tenders') || 'null') || {
+      date: todayStr(),
+      cash: 0,
+      upi: 0
+    };
+    const snap = base.date === todayStr() ? base : { date: todayStr(), cash: 0, upi: 0 };
+    const next = { ...snap, upi: parseFloat((snap.upi + delta).toFixed(2)) };
+    saveDailyTenders(next);
+  };
+
+  // ===== Mount =====
   useEffect(() => {
+    loadDrawer();
+    loadDailyTenders();
     loadRecentSales();
     loadDues();
     calculateTodayStats();
   }, []);
 
+  // NEW: all sales for invoice searching
+  const [allSales, setAllSales] = useState([]);
+  const [returnInvoiceSearch, setReturnInvoiceSearch] = useState('');
+  const [dueInvoiceSearch, setDueInvoiceSearch] = useState('');
+
   const loadRecentSales = () => {
     const sales = JSON.parse(localStorage.getItem('pos_sales') || '[]');
     const sortedSales = sales.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-    setRecentSales(sortedSales.slice(0, 20));
+    setAllSales(sortedSales);                 // full list for searching
+    setRecentSales(sortedSales.slice(0, 20)); // keep quick recent list (if needed elsewhere)
+  };
+
+  const computeOutstandingDue = (list) => {
+    // Sum current balances; fallback computes from components if balance missing.
+    return list.reduce((sum, d) => {
+      if (typeof d.balance === 'number') return sum + d.balance;
+      const paidParts = (d.payments || []).reduce((s, p) => s + (p.amount || 0), 0);
+      const upfront = d.upfrontPaid || 0;
+      const total = d.total || 0;
+      const bal = Math.max(0, total - upfront - paidParts);
+      return sum + bal;
+    }, 0);
   };
 
   const loadDues = () => {
     const stored = JSON.parse(localStorage.getItem('pos_dues') || '[]');
-    const list = stored.filter(d => !d.settled).sort((a,b) => new Date(b.createdAt) - new Date(a.createdAt));
+    const list = stored
+      .filter((d) => !d.settled)
+      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
     setDues(list);
-    // initialize inputs with default = current balance
+
+    // NEW: set outstanding total
+    setOutstandingDueTotal(parseFloat(computeOutstandingDue(list).toFixed(2)));
+
     const inputs = {};
-    list.forEach(d => { inputs[d.id] = (d.balance ?? 0).toString(); });
+    const modes = {};
+    list.forEach((d) => {
+      inputs[d.id] = (d.balance ?? 0).toString();
+      modes[d.id] = 'cash';
+    });
     setCollectionInputs(inputs);
+    setCollectionModes(modes);
   };
 
   const calculateTodayStats = () => {
@@ -108,38 +224,40 @@ const POS = () => {
     const currentYear = new Date().getFullYear();
 
     const todaySales = sales
-      .filter(sale => new Date(sale.timestamp).toDateString() === today)
+      .filter((sale) => new Date(sale.timestamp).toDateString() === today)
       .reduce((sum, sale) => sum + sale.total, 0);
 
     const todayReturns = returns
-      .filter(returnItem => new Date(returnItem.timestamp).toDateString() === today)
+      .filter((returnItem) => new Date(returnItem.timestamp).toDateString() === today)
       .reduce((sum, returnItem) => sum + returnItem.totalRefund, 0);
 
     const monthlySales = sales
-      .filter(sale => {
+      .filter((sale) => {
         const saleDate = new Date(sale.timestamp);
         return saleDate.getMonth() === currentMonth && saleDate.getFullYear() === currentYear;
       })
       .reduce((sum, sale) => sum + sale.total, 0);
 
     const monthlyReturns = returns
-      .filter(returnItem => {
+      .filter((returnItem) => {
         const returnDate = new Date(returnItem.timestamp);
         return returnDate.getMonth() === currentMonth && returnDate.getFullYear() === currentYear;
       })
       .reduce((sum, returnItem) => sum + returnItem.totalRefund, 0);
 
-    // NEW: dues created today (unpaid portion for sales made today with DUE)
+    // dues created today (unpaid portion for sales made today with DUE)
     const dueToday = sales
-      .filter(sale => new Date(sale.timestamp).toDateString() === today && sale.paymentMethod === 'DUE')
-      .reduce((sum, sale) => sum + Math.max(0, (sale.total - (sale.amountPaid || 0))), 0);
+      .filter(
+        (sale) =>
+          new Date(sale.timestamp).toDateString() === today && sale.paymentMethod === 'DUE'
+      )
+      .reduce((sum, sale) => sum + Math.max(0, sale.total - (sale.amountPaid || 0)), 0);
 
-    // NEW: dues collected today (payments made later)
+    // dues collected today
     const dueCollectionsToday = duePayments
-      .filter(p => new Date(p.timestamp).toDateString() === today)
+      .filter((p) => new Date(p.timestamp).toDateString() === today)
       .reduce((sum, p) => sum + p.amount, 0);
 
-    // NEW: today's total = your original definition (kept as-is)
     const todayTotal = todaySales;
 
     setTodayStats({
@@ -153,21 +271,22 @@ const POS = () => {
     });
   };
 
-  const filteredProducts = products.filter(product =>
-    product.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    product.barcode.includes(searchTerm) ||
-    (product.brand && product.brand.toLowerCase().includes(searchTerm.toLowerCase()))
+  const filteredProducts = products.filter(
+    (product) =>
+      product.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      product.barcode.includes(searchTerm) ||
+      (product.brand && product.brand.toLowerCase().includes(searchTerm.toLowerCase()))
   );
 
   const addToCart = (product) => {
-    const existingItem = cart.find(item => item.id === product.id);
+    const existingItem = cart.find((item) => item.id === product.id);
     if (existingItem) {
       if (existingItem.quantity < product.stock) {
-        setCart(cart.map(item =>
-          item.id === product.id
-            ? { ...item, quantity: item.quantity + 1 }
-            : item
-        ));
+        setCart(
+          cart.map((item) =>
+            item.id === product.id ? { ...item, quantity: item.quantity + 1 } : item
+          )
+        );
       } else {
         alert('Insufficient stock!');
       }
@@ -181,25 +300,29 @@ const POS = () => {
   };
 
   const updateCartQuantity = (id, change) => {
-    setCart(cart.map(item => {
-      if (item.id === id) {
-        const newQuantity = item.quantity + change;
-        if (newQuantity <= 0) {
-          return null;
-        }
-        const product = products.find(p => p.id === id);
-        if (product && newQuantity > product.stock) {
-          alert('Insufficient stock!');
+    setCart(
+      cart
+        .map((item) => {
+          if (item.id === id) {
+            const newQuantity = item.quantity + change;
+            if (newQuantity <= 0) {
+              return null;
+            }
+            const product = products.find((p) => p.id === id);
+            if (product && newQuantity > product.stock) {
+              alert('Insufficient stock!');
+              return item;
+            }
+            return { ...item, quantity: newQuantity };
+          }
           return item;
-        }
-        return { ...item, quantity: newQuantity };
-      }
-      return item;
-    }).filter(Boolean));
+        })
+        .filter(Boolean)
+    );
   };
 
   const removeFromCart = (id) => {
-    setCart(cart.filter(item => item.id !== id));
+    setCart(cart.filter((item) => item.id !== id));
   };
 
   const handleDirectBillSubmit = (e) => {
@@ -216,7 +339,7 @@ const POS = () => {
       discount: 0,
       discountType: 'amount'
     };
-    
+
     setCart([...cart, directItem]);
     setDirectBillForm({ name: '', price: '', quantity: 1, brand: '', size: '' });
     setShowDirectBill(false);
@@ -225,16 +348,18 @@ const POS = () => {
   const applyDiscount = () => {
     if (!selectedItemForDiscount || !discountValue) return;
 
-    setCart(cart.map(item => {
-      if (item.id === selectedItemForDiscount.id) {
-        return {
-          ...item,
-          discount: parseFloat(discountValue),
-          discountType: discountType
-        };
-      }
-      return item;
-    }));
+    setCart(
+      cart.map((item) => {
+        if (item.id === selectedItemForDiscount.id) {
+          return {
+            ...item,
+            discount: parseFloat(discountValue),
+            discountType: discountType
+          };
+        }
+        return item;
+      })
+    );
 
     setShowDiscountModal(false);
     setSelectedItemForDiscount(null);
@@ -245,7 +370,7 @@ const POS = () => {
     const baseTotal = item.price * item.quantity;
     if (item.discount > 0) {
       if (item.discountType === 'percentage') {
-        return baseTotal - (baseTotal * item.discount / 100);
+        return baseTotal - (baseTotal * item.discount) / 100;
       } else {
         return Math.max(0, baseTotal - item.discount);
       }
@@ -254,7 +379,7 @@ const POS = () => {
   };
 
   const calculateTotals = () => {
-    const subtotal = cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+    const subtotal = cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
     const totalDiscount = cart.reduce((sum, item) => {
       const baseTotal = item.price * item.quantity;
       return sum + (baseTotal - calculateItemTotal(item));
@@ -274,13 +399,14 @@ const POS = () => {
     };
   };
 
-  // NEW: record due payment (collections)
-  const recordDueCollection = (dueId, amount) => {
+  // record due payment (collections)
+  const recordDueCollection = (dueId, amount, mode) => {
     const payments = JSON.parse(localStorage.getItem('pos_due_payments') || '[]');
     payments.push({
       id: `COL${Date.now()}`,
       dueId,
       amount,
+      mode, // 'cash' | 'upi'
       timestamp: new Date().toISOString(),
       cashier: user.name
     });
@@ -295,24 +421,47 @@ const POS = () => {
 
     const totals = calculateTotals();
 
-    // If DUE -> allow 0 or partial upfront; else default to full
-    const defaultPaid = paymentMethod === 'DUE' ? 0 : totals.total;
+    // Defaults for amountPaid based on type
+    const defaultPaid = payType === 'PAID' ? totals.total : 0;
     const paidAmount = parseFloat(amountPaid) || defaultPaid;
-    
-    if (paymentMethod !== 'DUE' && paidAmount < totals.total) {
-      alert('Insufficient payment amount!');
-      return;
+
+    if (payType === 'PAID') {
+      if (paidAmount < totals.total) {
+        alert('Insufficient payment amount for PAID!');
+        return;
+      }
+      if (!['cash', 'upi'].includes(payMode)) {
+        alert('Select payment mode (Cash or UPI).');
+        return;
+      }
     }
 
-    if (paymentMethod === 'DUE' && !customerName.trim()) {
-      alert('Please enter customer name for DUE.');
-      return;
+    if (payType === 'DUE') {
+      if (!customerName.trim()) {
+        alert('Please enter customer name for DUE.');
+        return;
+      }
+      if (paidAmount < 0 || isNaN(paidAmount)) {
+        alert('Enter a valid upfront amount (or leave blank for 0).');
+        return;
+      }
+      if (!['cash', 'upi'].includes(payMode)) {
+        alert('Select upfront payment mode (Cash or UPI).');
+        return;
+      }
+      if (paidAmount > totals.total) {
+        alert('Upfront cannot exceed total.');
+        return;
+      }
     }
+
+    // Build sale object
+    const salePaymentMethod = payType === 'PAID' ? payMode : 'DUE';
 
     const sale = {
       id: `INV${Date.now()}`,
       timestamp: new Date().toISOString(),
-      items: cart.map(item => ({
+      items: cart.map((item) => ({
         ...item,
         finalPrice: calculateItemTotal(item) / item.quantity
       })),
@@ -323,18 +472,17 @@ const POS = () => {
       cgst: totals.cgst,
       sgst: totals.sgst,
       total: totals.total,
-      paymentMethod,
+      paymentMethod: salePaymentMethod,
       amountPaid: Math.min(paidAmount, totals.total),
       change: Math.max(0, paidAmount - totals.total),
       cashier: user.name,
-      // helpful for referencing from dues
-      customerName: paymentMethod === 'DUE' ? customerName.trim() : undefined
+      customerName: payType === 'DUE' ? customerName.trim() : undefined
     };
 
-    // Update stock for inventory items
-    cart.forEach(item => {
+    // Update stock
+    cart.forEach((item) => {
       if (!item.id.startsWith('direct_')) {
-        const product = products.find(p => p.id === item.id);
+        const product = products.find((p) => p.id === item.id);
         if (product) {
           updateStock(item.id, product.stock - item.quantity);
         }
@@ -346,8 +494,8 @@ const POS = () => {
     sales.push(sale);
     localStorage.setItem('pos_sales', JSON.stringify(sales));
 
-    // If DUE: create a due record for remaining balance
-    if (paymentMethod === 'DUE') {
+    // Create/Update due if needed
+    if (payType === 'DUE') {
       const remaining = Math.max(0, totals.total - sale.amountPaid);
       if (remaining > 0) {
         const allDues = JSON.parse(localStorage.getItem('pos_dues') || '[]');
@@ -357,34 +505,58 @@ const POS = () => {
           customerName: customerName.trim(),
           total: totals.total,
           upfrontPaid: sale.amountPaid,
+          upfrontTender: payMode, // 'cash' | 'upi'
           balance: remaining,
           createdAt: sale.timestamp,
           settled: false,
-          payments: [] // later collections
+          payments: []
         };
         allDues.push(due);
         localStorage.setItem('pos_dues', JSON.stringify(allDues));
       }
     }
 
-    // Print receipt
+    // Drawer & Tender updates
+    if (payType === 'PAID') {
+      if (payMode === 'cash') {
+        updateDrawer(totals.total); // full amount enters drawer
+        bumpCashTotal(totals.total);
+      } else {
+        bumpUPITotal(totals.total);
+      }
+    } else if (payType === 'DUE') {
+      const upfront = sale.amountPaid;
+      if (upfront > 0) {
+        if (payMode === 'cash') {
+          updateDrawer(upfront);
+          bumpCashTotal(upfront);
+        } else {
+          bumpUPITotal(upfront);
+        }
+      }
+    }
+
+    // Print receipt (unchanged)
     printSaleReceipt(sale);
 
-    // Reset
+    // Reset & reload
     setCart([]);
     setAmountPaid('');
     setCustomerName('');
-    setPaymentMethod('cash');
+    setPayMode('cash');
+    setPayType('PAID');
     loadRecentSales();
-    loadDues();
+    loadDues();            // updates outstandingDueTotal as well
     calculateTodayStats();
-    
+    loadDailyTenders();
+
     alert('Sale completed successfully!');
   };
 
+  // ======= RECEIPT: kept exactly as your original HTML/CSS =======
   const printSaleReceipt = (sale) => {
     const printWindow = window.open('', '_blank', 'width=400,height=600');
-    
+
     const receiptHTML = `
       <!DOCTYPE html>
 <html>
@@ -443,19 +615,32 @@ const POS = () => {
     </tr>
   </thead>
   <tbody>
-    ${sale.items.map(item => `
+    ${sale.items
+      .map(
+        (item) => `
       <tr class="no-break">
         <td class="left  col-item sub nowrap">${item.name}${item.size ? ` (${item.size})` : ''}</td>
         <td class="center col-qty sub mono nowrap">${item.quantity}</td>
         <td class="right col-rate sub mono nowrap">₹${item.price.toFixed(2)}</td>
         <td class="right col-amt  sub mono nowrap">₹${(item.price * item.quantity).toFixed(2)}</td>
       </tr>
-      ${item.discount > 0 ? `
+      ${
+        item.discount > 0
+          ? `
         <tr class="no-break">
-          <td colspan="3" class="left sub nowrap">Discount (${item.discountType === 'percentage' ? item.discount + '%' : '₹' + item.discount})</td>
-          <td class="right sub mono nowrap">-₹${((item.price * item.quantity) - (item.finalPrice * item.quantity)).toFixed(2)}</td>
-        </tr>` : '' }
-    `).join('')}
+          <td colspan="3" class="left sub nowrap">Discount (${
+            item.discountType === 'percentage' ? item.discount + '%' : '₹' + item.discount
+          })</td>
+          <td class="right sub mono nowrap">-₹${(
+            item.price * item.quantity -
+            item.finalPrice * item.quantity
+          ).toFixed(2)}</td>
+        </tr>`
+          : ''
+      }
+    `
+      )
+      .join('')}
   </tbody>
 </table>
 
@@ -463,14 +648,36 @@ const POS = () => {
 
 <table>
   <tr><td class="left sub">Subtotal</td><td class="right sub mono">₹${sale.subtotal.toFixed(2)}</td></tr>
-  ${sale.totalDiscount > 0 ? `<tr><td class="left sub">Total Discount</td><td class="right sub mono">-₹${sale.totalDiscount.toFixed(2)}</td></tr>` : ''}
-  <tr><td class="left sub">After Discount</td><td class="right sub mono">₹${sale.afterDiscount.toFixed(2)}</td></tr>
-  <tr><td class="left sub">CGST (${(shopSettings.taxRate / 2)}%)</td><td class="right sub mono">₹${sale.cgst.toFixed(2)}</td></tr>
-  <tr><td class="left sub">SGST (${(shopSettings.taxRate / 2)}%)</td><td class="right sub mono">₹${sale.sgst.toFixed(2)}</td></tr>
+  ${
+    sale.totalDiscount > 0
+      ? `<tr><td class="left sub">Total Discount</td><td class="right sub mono">-₹${sale.totalDiscount.toFixed(
+          2
+        )}</td></tr>`
+      : ''
+  }
+  <tr><td class="left sub">After Discount</td><td class="right sub mono">₹${sale.afterDiscount.toFixed(
+    2
+  )}</td></tr>
+  <tr><td class="left sub">CGST (${shopSettings.taxRate / 2}%)</td><td class="right sub mono">₹${sale.cgst.toFixed(
+    2
+  )}</td></tr>
+  <tr><td class="left sub">SGST (${shopSettings.taxRate / 2}%)</td><td class="right sub mono">₹${sale.sgst.toFixed(
+    2
+  )}</td></tr>
   <tr class="rule-thick"></tr>
-  <tr class="emph-row"><td class="left key-label">Total</td><td class="right mono">₹${sale.total.toFixed(2)}</td></tr>
-  <tr class="emph-row"><td class="left">Paid (${sale.paymentMethod})</td><td class="right mono">₹${sale.amountPaid.toFixed(2)}</td></tr>
-  <tr class="emph-row"><td class="left">${sale.paymentMethod === 'DUE' ? 'Balance' : 'Change'}</td><td class="right mono">₹${(sale.paymentMethod === 'DUE' ? Math.max(0, sale.total - sale.amountPaid) : sale.change).toFixed(2)}</td></tr>
+  <tr class="emph-row"><td class="left key-label">Total</td><td class="right mono">₹${sale.total.toFixed(
+    2
+  )}</td></tr>
+  <tr class="emph-row"><td class="left">Paid (${sale.paymentMethod})</td><td class="right mono">₹${sale.amountPaid.toFixed(
+    2
+  )}</td></tr>
+  <tr class="emph-row"><td class="left">${
+    sale.paymentMethod === 'DUE' ? 'Balance' : 'Change'
+  }</td><td class="right mono">₹${
+      sale.paymentMethod === 'DUE'
+        ? Math.max(0, sale.total - sale.amountPaid).toFixed(2)
+        : sale.change.toFixed(2)
+    }</td></tr>
 </table>
 
 <div class="rule"></div>
@@ -507,7 +714,10 @@ const POS = () => {
       return;
     }
 
-    const totalRefund = returnItems.reduce((sum, item) => sum + (item.finalPrice * item.returnQuantity), 0);
+    const totalRefund = returnItems.reduce(
+      (sum, item) => sum + item.finalPrice * item.returnQuantity,
+      0
+    );
 
     const returnTransaction = {
       id: `RET${Date.now()}`,
@@ -519,21 +729,25 @@ const POS = () => {
       processedBy: user.name
     };
 
-    // Update original sale - remove returned items
+    // Update original sale
     const sales = JSON.parse(localStorage.getItem('pos_sales') || '[]');
-    const updatedSales = sales.map(sale => {
+    const updatedSales = sales.map((sale) => {
       if (sale.id === selectedSaleForReturn.id) {
-        const updatedItems = sale.items.map(saleItem => {
-          const returnItem = returnItems.find(ri => ri.id === saleItem.id);
-          if (returnItem) {
-            const remainingQuantity = saleItem.quantity - returnItem.returnQuantity;
-            return remainingQuantity > 0 ? { ...saleItem, quantity: remainingQuantity } : null;
-          }
-          return saleItem;
-        }).filter(Boolean);
+        const updatedItems = sale.items
+          .map((saleItem) => {
+            const ri = returnItems.find((r) => r.id === saleItem.id);
+            if (ri) {
+              const remaining = saleItem.quantity - ri.returnQuantity;
+              return remaining > 0 ? { ...saleItem, quantity: remaining } : null;
+            }
+            return saleItem;
+          })
+          .filter(Boolean);
 
-        // Recalculate sale totals
-        const newSubtotal = updatedItems.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+        const newSubtotal = updatedItems.reduce(
+          (sum, item) => sum + item.price * item.quantity,
+          0
+        );
         const newTotalDiscount = updatedItems.reduce((sum, item) => {
           const baseTotal = item.price * item.quantity;
           const itemTotal = item.finalPrice * item.quantity;
@@ -560,20 +774,24 @@ const POS = () => {
 
     localStorage.setItem('pos_sales', JSON.stringify(updatedSales));
 
-    // Save return transaction
+    // Save return
     const returns = JSON.parse(localStorage.getItem('pos_returns') || '[]');
     returns.push(returnTransaction);
     localStorage.setItem('pos_returns', JSON.stringify(returns));
 
-    // Update stock for returned items
-    returnItems.forEach(item => {
+    // Update stock
+    returnItems.forEach((item) => {
       if (!item.id.startsWith('direct_')) {
-        const product = products.find(p => p.id === item.id);
+        const product = products.find((p) => p.id === item.id);
         if (product) {
           updateStock(item.id, product.stock + item.returnQuantity);
         }
       }
     });
+
+    // Assume refund is paid in CASH -> deduct drawer and cash-total
+    updateDrawer(-totalRefund);
+    bumpCashTotal(-totalRefund);
 
     printReturnReceipt(returnTransaction);
 
@@ -584,13 +802,15 @@ const POS = () => {
     setReturnReason('');
     loadRecentSales();
     calculateTodayStats();
+    loadDailyTenders();
 
     alert(`Return processed successfully! Refund amount: ₹${totalRefund.toFixed(2)}`);
   };
 
+  // ======= RETURN RECEIPT: kept exactly as your original =======
   const printReturnReceipt = (returnTransaction) => {
     const printWindow = window.open('', '_blank', 'width=400,height=600');
-    
+
     const receiptHTML = `
       <!DOCTYPE html>
 <html>
@@ -610,7 +830,6 @@ const POS = () => {
     .center { text-align: center; } .left { text-align: left; } .right { text-align: right; } .mono { font-variant-numeric: tabular-nums; } .bold { font-weight: 700; }
     .header { font-size: 13px; letter-spacing: 0.2px; padding: 2px 0; text-transform: uppercase; font-weight: 700; color: black; border-radius: 3px; margin-bottom: 4px; }
     .sub { font-size: 9px; letter-spacing: 0.2px; }
-    .sub-header { font-size: 9px; margin-bottom: 2px; }
     .rule { border-bottom: 1px dashed #000; margin: 4px 0; }
     .rule-thick { border-bottom: 2px solid #000; margin: 6px 0; }
     table { border-collapse: collapse; width: 100%; table-layout: fixed; }
@@ -652,14 +871,18 @@ const POS = () => {
       </tr>
     </thead>
     <tbody>
-      ${returnTransaction.items.map(item => `
+      ${returnTransaction.items
+        .map(
+          (item) => `
         <tr class="no-break">
           <td class="left sub nowrap">${item.name}${item.size ? ` (${item.size})` : ''}</td>
           <td class="center sub mono nowrap">${item.returnQuantity}</td>
           <td class="right sub mono nowrap">₹${item.finalPrice.toFixed(2)}</td>
           <td class="right sub mono nowrap">₹${(item.finalPrice * item.returnQuantity).toFixed(2)}</td>
         </tr>
-      `).join('')}
+      `
+        )
+        .join('')}
     </tbody>
   </table>
 
@@ -691,27 +914,31 @@ const POS = () => {
 
   const selectSaleForReturn = (sale) => {
     setSelectedSaleForReturn(sale);
-    setReturnItems(sale.items.map(item => ({
-      ...item,
-      returnQuantity: 0,
-      maxReturnQuantity: item.quantity
-    })));
+    setReturnItems(
+      sale.items.map((item) => ({
+        ...item,
+        returnQuantity: 0,
+        maxReturnQuantity: item.quantity
+      }))
+    );
   };
 
   const updateReturnQuantity = (itemId, quantity) => {
-    setReturnItems(returnItems.map(item => {
-      if (item.id === itemId) {
-        return {
-          ...item,
-          returnQuantity: Math.max(0, Math.min(quantity, item.maxReturnQuantity))
-        };
-      }
-      return item;
-    }));
+    setReturnItems(
+      returnItems.map((item) => {
+        if (item.id === itemId) {
+          return {
+            ...item,
+            returnQuantity: Math.max(0, Math.min(quantity, item.maxReturnQuantity))
+          };
+        }
+        return item;
+      })
+    );
   };
 
-  // NEW: core collector that supports partial or full collections
-  const collectDue = (due, amount) => {
+  // collect due with mode
+  const collectDue = (due, amount, mode) => {
     const amt = parseFloat(amount);
     if (isNaN(amt) || amt <= 0) {
       alert('Invalid amount entered!');
@@ -721,43 +948,58 @@ const POS = () => {
       alert('Amount cannot exceed remaining balance!');
       return;
     }
+    if (!['cash', 'upi'].includes(mode)) {
+      alert('Select a valid collection mode.');
+      return;
+    }
 
     // update due
     const all = JSON.parse(localStorage.getItem('pos_dues') || '[]');
-    const updated = all.map(d => {
+    const updated = all.map((d) => {
       if (d.id === due.id) {
         const payment = {
           id: `PAY${Date.now()}`,
           amount: amt,
+          mode, // 'cash' | 'upi'
           timestamp: new Date().toISOString(),
           cashier: user.name
         };
         const newPayments = [...(d.payments || []), payment];
         const newBalance = (d.balance || 0) - amt;
-        return { 
-          ...d, 
-          payments: newPayments, 
-          balance: newBalance, 
-          settled: newBalance <= 0, 
-          settledAt: newBalance <= 0 ? payment.timestamp : d.settledAt 
+        return {
+          ...d,
+          payments: newPayments,
+          balance: newBalance,
+          settled: newBalance <= 0,
+          settledAt: newBalance <= 0 ? payment.timestamp : d.settledAt
         };
       }
       return d;
     });
     localStorage.setItem('pos_dues', JSON.stringify(updated));
 
-    // record collection for today's totals
-    recordDueCollection(due.id, amt);
+    // record collection (for stats)
+    recordDueCollection(due.id, amt, mode);
+
+    // Tender & drawer updates
+    if (mode === 'cash') {
+      updateDrawer(amt);
+      bumpCashTotal(amt);
+    } else {
+      bumpUPITotal(amt);
+    }
 
     loadDues();
     calculateTodayStats();
-    alert(`Collected ₹${amt.toFixed(2)} from ${due.customerName}`);
+    loadDailyTenders();
+    alert(`Collected ₹${amt.toFixed(2)} (${mode.toUpperCase()}) from ${due.customerName}`);
   };
 
-  // UPDATED: keep a convenience full-settle action
   const settleDue = (due) => {
     if (!window.confirm(`Mark ₹${due.balance.toFixed(2)} as PAID for ${due.customerName}?`)) return;
-    collectDue(due, due.balance);
+    const mode = prompt('Enter collection mode: cash or upi', 'cash');
+    if (!mode) return;
+    collectDue(due, due.balance, mode.toLowerCase());
   };
 
   const totals = calculateTotals();
@@ -765,56 +1007,55 @@ const POS = () => {
   return (
     <div className="space-y-6">
       {/* Dashboard Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div className="bg-gradient-to-r from-blue-500 to-blue-600 rounded-xl shadow-sm p-4 text-white">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        {/* Drawer cash */}
+        <div className="bg-gradient-to-r from-purple-500 to-purple-600 rounded-xl shadow-sm p-4 text-white">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-blue-100 text-sm">Today's Sales</p>
-              <p className="text-2xl font-bold">₹{todayStats.sales.toFixed(2)}</p>
+              <p className="text-purple-100 text-sm">Drawer Cash (Today)</p>
+              <p className="text-2xl font-bold">₹{drawer.current.toFixed(2)}</p>
+              <p className="text-xs text-purple-100 mt-1">Opening: ₹{drawer.opening.toFixed(2)}</p>
             </div>
-            <TrendingUp className="w-8 h-8 text-blue-200" />
+            <DollarSign className="w-8 h-8 text-purple-200" />
           </div>
         </div>
+
+        {/* Tender split */}
         <div className="bg-gradient-to-r from-emerald-500 to-emerald-600 rounded-xl shadow-sm p-4 text-white">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-emerald-100 text-sm">Collected from dues today: </p>
-              <p className="text-2xl font-bold">₹{todayStats.dueCollectionsToday.toFixed(2)}</p>
+              <p className="text-emerald-100 text-sm">Today by Tender</p>
+              <p className="text-sm">
+                Cash: <span className="font-bold">₹{dailyTenders.cash.toFixed(2)}</span>
+              </p>
+              <p className="text-sm">
+                UPI: <span className="font-bold">₹{dailyTenders.upi.toFixed(2)}</span>
+              </p>
             </div>
             <DollarSign className="w-8 h-8 text-emerald-200" />
           </div>
         </div>
 
-       
+        {/* NEW: Outstanding Dues (till now) */}
+        <div className="bg-gradient-to-r from-slate-500 to-slate-600 rounded-xl shadow-sm p-4 text-white">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-slate-100 text-sm">Total Due Outstanding</p>
+              <p className="text-2xl font-bold">₹{outstandingDueTotal.toFixed(2)}</p>
+              <p className="text-xs text-slate-100 mt-1">Auto-updates with collections</p>
+            </div>
+            <Banknote className="w-8 h-8 text-slate-200" />
+          </div>
+        </div>
       </div>
 
-      {/* NEW row with Today's Due + Today's Total */}
+      {/* Dues & Returns row */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div className="bg-gradient-to-r from-gray-500 to-gray-600 rounded-xl shadow-sm p-4 text-white">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-gray-100 text-sm">Today's Due (new)</p>
-              <p className="text-2xl font-bold">₹{todayStats.dueToday.toFixed(2)}</p>
-            </div>
-            <Banknote className="w-8 h-8 text-gray-200" />
-          </div>
-        </div>
- <div className="bg-gradient-to-r from-orange-500 to-orange-600 rounded-xl shadow-sm p-4 text-white">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-orange-100 text-sm">Today's Returns</p>
-              <p className="text-2xl font-bold">₹{todayStats.returns.toFixed(2)}</p>
-            </div>
-            <TrendingDown className="w-8 h-8 text-orange-200" />
-          </div>
-        </div>
-        
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Product Search and Cart */}
         <div className="lg:col-span-2 space-y-6">
-          {/* Search and Actions */}
           <div className="bg-white rounded-xl shadow-sm p-6">
             <div className="flex flex-col sm:flex-row gap-4 mb-4">
               <div className="relative flex-1">
@@ -842,9 +1083,11 @@ const POS = () => {
                   <RotateCcw className="w-4 h-4" />
                   Returns
                 </button>
-                {/* NEW: Dues button */}
                 <button
-                  onClick={() => { loadDues(); setShowDues(true); }}
+                  onClick={() => {
+                    loadDues();
+                    setShowDues(true);
+                  }}
                   className="px-4 py-3 bg-gray-700 text-white rounded-lg hover:bg-gray-800 transition-colors flex items-center gap-2 whitespace-nowrap"
                 >
                   <ListChecks className="w-4 h-4" />
@@ -862,15 +1105,23 @@ const POS = () => {
                   className="p-4 border border-gray-200 rounded-lg hover:border-blue-300 hover:shadow-md transition-all cursor-pointer"
                 >
                   <h3 className="font-medium text-gray-900 mb-1 text-sm">{product.name}</h3>
-                  <p className="text-xs text-gray-600 mb-2">{product.brand} - {product.category}</p>
-                  {product.size && <p className="text-xs text-gray-500 mb-2">Size: {product.size}</p>}
+                  <p className="text-xs text-gray-600 mb-2">
+                    {product.brand} - {product.category}
+                  </p>
+                  {product.size && (
+                    <p className="text-xs text-gray-500 mb-2">Size: {product.size}</p>
+                  )}
                   <div className="flex justify-between items-center">
                     <span className="font-bold text-blue-600">₹{product.price.toFixed(2)}</span>
-                    <span className={`text-xs px-2 py-1 rounded-full ${
-                      product.stock > 2 ? 'bg-green-300 text-black' :
-                      product.stock > 0 ? 'bg-yellow-300 text-black' :
-                      'bg-red-300 text-black'
-                    }`}>
+                    <span
+                      className={`text-xs px-2 py-1 rounded-full ${
+                        product.stock > 2
+                          ? 'bg-green-300 text-black'
+                          : product.stock > 0
+                          ? 'bg-yellow-300 text-black'
+                          : 'bg-red-300 text-black'
+                      }`}
+                    >
                       Stock: {product.stock}
                     </span>
                   </div>
@@ -893,18 +1144,25 @@ const POS = () => {
                 <div key={item.id} className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg">
                   <div className="flex-1 min-w-0">
                     <h4 className="font-medium text-sm text-gray-900 truncate">{item.name}</h4>
-                    <p className="text-xs text-gray-600">{item.brand} {item.size && `- Size: ${item.size}`}</p>
+                    <p className="text-xs text-gray-600">
+                      {item.brand} {item.size && `- Size: ${item.size}`}
+                    </p>
                     <div className="flex items-center gap-2 mt-1">
                       <span className="text-sm font-medium">₹{item.price.toFixed(2)}</span>
                       {item.discount > 0 && (
                         <span className="text-xs text-green-600">
-                          -{item.discountType === 'percentage' ? `${item.discount}%` : `₹${item.discount}`}
+                          -
+                          {item.discountType === 'percentage'
+                            ? `${item.discount}%`
+                            : `₹${item.discount}`}
                         </span>
                       )}
                     </div>
-                    <p className="text-sm font-bold text-blue-600">Total: ₹{calculateItemTotal(item).toFixed(2)}</p>
+                    <p className="text-sm font-bold text-blue-600">
+                      Total: ₹{calculateItemTotal(item).toFixed(2)}
+                    </p>
                   </div>
-                  
+
                   <div className="flex flex-col gap-2">
                     <div className="flex items-center gap-1">
                       <button
@@ -921,7 +1179,7 @@ const POS = () => {
                         <Plus className="w-3 h-3" />
                       </button>
                     </div>
-                    
+
                     <div className="flex gap-1">
                       <button
                         onClick={() => {
@@ -933,7 +1191,7 @@ const POS = () => {
                         className="w-20 h-10 bg-blue-100 text-blue-600 rounded hover:bg-blue-200 flex items-center justify-center"
                         title="Add Discount"
                       >
-                      Discount
+                        Discount
                       </button>
                       <button
                         onClick={() => removeFromCart(item.id)}
@@ -942,7 +1200,6 @@ const POS = () => {
                         <Trash2 className="w-3 h-3" />
                       </button>
                     </div>
-                    
                   </div>
                 </div>
               ))}
@@ -974,11 +1231,11 @@ const POS = () => {
                     <span>₹{totals.afterDiscount.toFixed(2)}</span>
                   </div>
                   <div className="flex justify-between text-xs text-gray-600">
-                    <span>CGST ({(shopSettings.taxRate / 2)}%):</span>
+                    <span>CGST ({shopSettings.taxRate / 2}%):</span>
                     <span>₹{totals.cgst.toFixed(2)}</span>
                   </div>
                   <div className="flex justify-between text-xs text-gray-600">
-                    <span>SGST ({(shopSettings.taxRate / 2)}%):</span>
+                    <span>SGST ({shopSettings.taxRate / 2}%):</span>
                     <span>₹{totals.sgst.toFixed(2)}</span>
                   </div>
                   <div className="flex justify-between text-lg font-bold border-t pt-2">
@@ -987,60 +1244,80 @@ const POS = () => {
                   </div>
                 </div>
 
-                {/* Payment */}
+                {/* Payment (two-step) */}
                 <div className="space-y-3 mt-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Payment Method
-                    </label>
-                    <select
-                      value={paymentMethod}
-                      onChange={(e) => setPaymentMethod(e.target.value)}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    >
-                      <option value="cash">Cash</option>
-                      <option value="card">Card</option>
-                      <option value="upi">UPI</option>
-                      <option value="DUE">DUE</option>
-                    </select>
-                  </div>
-
-                  {/* Conditional Input for Due */}
-                  {paymentMethod === 'DUE' && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">
-                        Customer Name
+                        Payment Type
                       </label>
-                      <input
-                        type="text"
-                        value={customerName}
-                        onChange={(e) => setCustomerName(e.target.value)}
-                        placeholder="Enter customer name"
+                      <select
+                        value={payType}
+                        onChange={(e) => setPayType(e.target.value)}
                         className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                      />
-                      <p className="text-xs text-gray-500 mt-1">
-                        You can take partial upfront and collect the rest later.
-                      </p>
+                      >
+                        <option value="PAID">PAID (Full)</option>
+                        <option value="DUE">DUE (Credit)</option>
+                      </select>
                     </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        {payType === 'PAID' ? 'Payment Mode' : 'Upfront Payment Mode'}
+                      </label>
+                      <select
+                        value={payMode}
+                        onChange={(e) => setPayMode(e.target.value)}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      >
+                        <option value="cash">Cash</option>
+                        <option value="upi">UPI</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  {/* Conditional fields for DUE */}
+                  {payType === 'DUE' && (
+                    <>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                          Customer Name
+                        </label>
+                        <input
+                          type="text"
+                          value={customerName}
+                          onChange={(e) => setCustomerName(e.target.value)}
+                          placeholder="Enter customer name"
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        />
+                        <p className="text-xs text-gray-500 mt-1">
+                          Remaining balance will be recorded as DUE.
+                        </p>
+                      </div>
+                    </>
                   )}
 
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Amount Paid
+                      {payType === 'PAID'
+                        ? `Amount Paid (${payMode.toUpperCase()})`
+                        : 'Upfront Amount Received'}
                     </label>
                     <input
                       type="number"
                       step="1"
                       value={amountPaid}
                       onChange={(e) => setAmountPaid(e.target.value)}
-                      placeholder={totals.total.toFixed(2)}
+                      placeholder={payType === 'PAID' ? totals.total.toFixed(2) : '0'}
                       className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                     />
-                    {amountPaid && parseFloat(amountPaid) >= totals.total && (
-                      <p className="text-sm text-green-600 mt-1">
-                        Change: ₹{(parseFloat(amountPaid) - totals.total).toFixed(2)}
-                      </p>
-                    )}
+                    {payType === 'PAID' &&
+                      amountPaid &&
+                      parseFloat(amountPaid) >= totals.total && (
+                        <p className="text-sm text-green-600 mt-1">
+                          Change: ₹{(parseFloat(amountPaid) - totals.total).toFixed(2)}
+                        </p>
+                      )}
                   </div>
 
                   <button
@@ -1073,11 +1350,15 @@ const POS = () => {
 
             <form onSubmit={handleDirectBillSubmit} className="p-6 space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Product Name *</label>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Product Name *
+                </label>
                 <input
                   type="text"
                   value={directBillForm.name}
-                  onChange={(e) => setDirectBillForm({...directBillForm, name: e.target.value})}
+                  onChange={(e) =>
+                    setDirectBillForm({ ...directBillForm, name: e.target.value })
+                  }
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                   placeholder="e.g., Custom Leather Shoes"
                   required
@@ -1086,25 +1367,36 @@ const POS = () => {
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Price (₹) *</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Price (₹) *
+                  </label>
                   <input
                     type="number"
                     step="0.01"
                     min="0"
                     value={directBillForm.price}
-                    onChange={(e) => setDirectBillForm({...directBillForm, price: e.target.value})}
+                    onChange={(e) =>
+                      setDirectBillForm({ ...directBillForm, price: e.target.value })
+                    }
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                     required
                   />
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Quantity *</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Quantity *
+                  </label>
                   <input
                     type="number"
                     min="1"
                     value={directBillForm.quantity}
-                    onChange={(e) => setDirectBillForm({...directBillForm, quantity: parseInt(e.target.value)})}
+                    onChange={(e) =>
+                      setDirectBillForm({
+                        ...directBillForm,
+                        quantity: parseInt(e.target.value) || 1
+                      })
+                    }
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                     required
                   />
@@ -1113,22 +1405,30 @@ const POS = () => {
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Brand</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Brand
+                  </label>
                   <input
                     type="text"
                     value={directBillForm.brand}
-                    onChange={(e) => setDirectBillForm({...directBillForm, brand: e.target.value})}
+                    onChange={(e) =>
+                      setDirectBillForm({ ...directBillForm, brand: e.target.value })
+                    }
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                     placeholder="Brand name"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Size</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Size
+                  </label>
                   <input
                     type="text"
                     value={directBillForm.size}
-                    onChange={(e) => setDirectBillForm({...directBillForm, size: e.target.value})}
+                    onChange={(e) =>
+                      setDirectBillForm({ ...directBillForm, size: e.target.value })
+                    }
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                     placeholder="Size"
                   />
@@ -1163,19 +1463,27 @@ const POS = () => {
               <h2 className="text-xl font-semibold">Add Discount</h2>
               <button
                 onClick={() => setShowDiscountModal(false)}
-                className="p-2 hover:bg-gray-100 rounded-lg transition-colors">
+                className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+              >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
             <div className="p-6 space-y-4">
               <div>
-                <p className="text-sm text-gray-600 mb-2">Product: {selectedItemForDiscount.name}</p>
-                <p className="text-sm text-gray-600">Original Price: ₹{selectedItemForDiscount.price.toFixed(2)} × {selectedItemForDiscount.quantity}</p>
+                <p className="text-sm text-gray-600 mb-2">
+                  Product: {selectedItemForDiscount.name}
+                </p>
+                <p className="text-sm text-gray-600">
+                  Original Price: ₹{selectedItemForDiscount.price.toFixed(2)} ×{' '}
+                  {selectedItemForDiscount.quantity}
+                </p>
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Discount Type</label>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Discount Type
+                </label>
                 <select
                   value={discountType}
                   onChange={(e) => setDiscountType(e.target.value)}
@@ -1183,7 +1491,6 @@ const POS = () => {
                 >
                   <option value="amount">Fixed Amount (₹)</option>
                   <option value="percentage">Percentage (%)</option>
-                  
                 </select>
               </div>
 
@@ -1195,7 +1502,11 @@ const POS = () => {
                   type="number"
                   step="1"
                   min="0"
-                  max={discountType === 'percentage' ? '100' : (selectedItemForDiscount.price * selectedItemForDiscount.quantity).toString()}
+                  max={
+                    discountType === 'percentage'
+                      ? '100'
+                      : (selectedItemForDiscount.price * selectedItemForDiscount.quantity).toString()
+                  }
                   value={discountValue}
                   onChange={(e) => setDiscountValue(e.target.value)}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
@@ -1206,11 +1517,13 @@ const POS = () => {
               {discountValue && (
                 <div className="p-3 bg-blue-50 rounded-lg">
                   <p className="text-sm text-blue-800">
-                    Final Price: ₹{(() => {
-                      const baseTotal = selectedItemForDiscount.price * selectedItemForDiscount.quantity;
+                    Final Price: ₹
+                    {(() => {
+                      const baseTotal =
+                        selectedItemForDiscount.price * selectedItemForDiscount.quantity;
                       const discount = parseFloat(discountValue) || 0;
                       if (discountType === 'percentage') {
-                        return (baseTotal - (baseTotal * discount / 100)).toFixed(2);
+                        return (baseTotal - (baseTotal * discount) / 100).toFixed(2);
                       } else {
                         return Math.max(0, baseTotal - discount).toFixed(2);
                       }
@@ -1238,10 +1551,10 @@ const POS = () => {
         </div>
       )}
 
-      {/* Returns Modal (unchanged aside from calls) */}
+      {/* Returns Modal */}
       {showReturns && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-xl shadow-xl max-w-4xl w-full max-h-90vh overflow-y-auto">
+          <div className="bg-white rounded-xl shadow-xl max-w-4xl w-full max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between p-6 border-b">
               <h2 className="text-xl font-semibold">Process Returns</h2>
               <button
@@ -1261,38 +1574,67 @@ const POS = () => {
               {!selectedSaleForReturn ? (
                 <div>
                   <h3 className="text-lg font-medium mb-4">Select Sale to Return</h3>
-                  <div className="space-y-3  max-h-96 overflow-y-auto">
-                    {recentSales.map((sale) => (
-                      <div
-                        key={sale.id}
-                        onClick={() => selectSaleForReturn(sale)}
-                        className="p-4 border border-gray-200 rounded-lg hover:bg-red-200 hover:border-blue-300 hover:shadow-md transition-all cursor-pointer"
-                      >
-                        <div className="flex justify-between items-start mb-2">
-                          <div>
-                            <p className="font-medium">Sale #{sale.id}</p>
-                            <p className="text-sm text-gray-600">
-                              {new Date(sale.timestamp).toLocaleString('en-IN')}
-                            </p>
-                            <p className="text-sm text-gray-600">Cashier: {sale.cashier}</p>
-                          </div>
-                          <div className="text-right">
-                            <p className="font-bold text-green-600">₹{sale.total.toFixed(2)}</p>
-                            <p className="text-sm text-gray-600">{sale.items.length} items</p>
-                          </div>
-                        </div>
-                        <div className="text-sm text-gray-600">
-                          Items: {sale.items.map(item => `${item.name} (${item.quantity})`).join(', ')}
-                        </div>
-                      </div>
-                    ))}
+
+                  {/* NEW: Invoice search for returns */}
+                  <div className="relative mb-4">
+                    <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                    <input
+                      value={returnInvoiceSearch}
+                      onChange={(e) => setReturnInvoiceSearch(e.target.value)}
+                      placeholder="Search by Invoice / Bill No (e.g., INV123...)"
+                      className="w-full pl-9 pr-3 py-2 border rounded-lg"
+                    />
                   </div>
+
+                  {/* NEW: filtered list by invoice */}
+                  {(() => {
+                    const q = returnInvoiceSearch.trim().toLowerCase();
+                    const saleSource = q
+                      ? allSales.filter(s => String(s.id || '').toLowerCase().includes(q))
+                      : allSales.slice(0, 50);
+
+                    return (
+                      <>
+                        <div className="space-y-3  max-h-96 overflow-y-auto">
+                          {saleSource.length === 0 && (
+                            <div className="text-center text-gray-500 py-6">No invoices found</div>
+                          )}
+                          {saleSource.map((sale) => (
+                            <div
+                              key={sale.id}
+                              onClick={() => selectSaleForReturn(sale)}
+                              className="p-4 border border-gray-200 rounded-lg hover:bg-red-200 hover:border-blue-300 hover:shadow-md transition-all cursor-pointer"
+                            >
+                              <div className="flex justify-between items-start mb-2">
+                                <div>
+                                  <p className="font-medium">Sale #{sale.id}</p>
+                                  <p className="text-sm text-gray-600">
+                                    {new Date(sale.timestamp).toLocaleString('en-IN')}
+                                  </p>
+                                  <p className="text-sm text-gray-600">Cashier: {sale.cashier}</p>
+                                </div>
+                                <div className="text-right">
+                                  <p className="font-bold text-green-600">₹{sale.total.toFixed(2)}</p>
+                                  <p className="text-sm text-gray-600">{sale.items.length} items</p>
+                                </div>
+                              </div>
+                              <div className="text-sm text-gray-600">
+                                Items: {sale.items.map((item) => `${item.name} (${item.quantity})`).join(', ')}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </>
+                    );
+                  })()}
                 </div>
               ) : (
                 <div>
                   <div className="mb-6">
                     <div className="flex justify-between items-center mb-4">
-                      <h3 className="text-lg font-medium">Return Items from Sale #{selectedSaleForReturn.id}</h3>
+                      <h3 className="text-lg font-medium">
+                        Return Items from Sale #{selectedSaleForReturn.id}
+                      </h3>
                       <button
                         onClick={() => {
                           setSelectedSaleForReturn(null);
@@ -1314,9 +1656,12 @@ const POS = () => {
                         <div className="flex justify-between items-start mb-3">
                           <div>
                             <h4 className="font-medium">{item.name}</h4>
-                            <p className="text-sm text-gray-600">{item.brand} {item.size && `- Size: ${item.size}`}</p>
                             <p className="text-sm text-gray-600">
-                              Original: {item.quantity} × ₹{item.finalPrice.toFixed(2)} = ₹{(item.finalPrice * item.quantity).toFixed(2)}
+                              {item.brand} {item.size && `- Size: ${item.size}`}
+                            </p>
+                            <p className="text-sm text-gray-600">
+                              Original: {item.quantity} × ₹{item.finalPrice.toFixed(2)} = ₹
+                              {(item.finalPrice * item.quantity).toFixed(2)}
                             </p>
                           </div>
                           <div className="flex items-center gap-2">
@@ -1326,7 +1671,9 @@ const POS = () => {
                               min="0"
                               max={item.maxReturnQuantity}
                               value={item.returnQuantity}
-                              onChange={(e) => updateReturnQuantity(item.id, parseInt(e.target.value) || 0)}
+                              onChange={(e) =>
+                                updateReturnQuantity(item.id, parseInt(e.target.value) || 0)
+                              }
                               className="w-20 px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                             />
                             <span className="text-sm text-gray-500">/ {item.maxReturnQuantity}</span>
@@ -1342,7 +1689,9 @@ const POS = () => {
                   </div>
 
                   <div className="mb-6">
-                    <label className="block text-sm font-medium text-gray-700 mb-2">Return Reason *</label>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Return Reason *
+                    </label>
                     <select
                       value={returnReason}
                       onChange={(e) => setReturnReason(e.target.value)}
@@ -1359,11 +1708,14 @@ const POS = () => {
                     </select>
                   </div>
 
-                  {returnItems.some(item => item.returnQuantity > 0) && (
+                  {returnItems.some((item) => item.returnQuantity > 0) && (
                     <div className="bg-orange-50 border border-orange-200 rounded-lg p-4 mb-6">
                       <h4 className="font-medium text-orange-800 mb-2">Return Summary</h4>
                       <p className="text-orange-700">
-                        Total Refund: ₹{returnItems.reduce((sum, item) => sum + (item.finalPrice * item.returnQuantity), 0).toFixed(2)}
+                        Total Refund: ₹
+                        {returnItems
+                          .reduce((sum, item) => sum + item.finalPrice * item.returnQuantity, 0)
+                          .toFixed(2)}
                       </p>
                       <p className="text-sm text-orange-600 mt-1">
                         Items will be added back to inventory and removed from the original sale.
@@ -1385,7 +1737,9 @@ const POS = () => {
                     </button>
                     <button
                       onClick={processReturn}
-                      disabled={!returnItems.some(item => item.returnQuantity > 0) || !returnReason}
+                      disabled={
+                        !returnItems.some((item) => item.returnQuantity > 0) || !returnReason
+                      }
                       className="flex-1 px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                     >
                       <Printer className="w-4 h-4" />
@@ -1399,12 +1753,10 @@ const POS = () => {
         </div>
       )}
 
-      {/* NEW: Dues Modal with partial collection */}
+      {/* Dues Modal with partial collection + mode */}
       {showDues && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          
           <div className="bg-white rounded-xl shadow-xl max-w-3xl w-full max-h-[90vh] overflow-y-auto">
-            
             <div className="flex items-center justify-between p-6 border-b">
               <h2 className="text-xl font-semibold">Unpaid Dues</h2>
               <button
@@ -1416,72 +1768,178 @@ const POS = () => {
             </div>
 
             <div className="p-6 space-y-3">
-              {dues.length === 0 && (
-                <div className="text-center text-gray-500 py-8">No unpaid dues 🎉</div>
-              )}
+              {/* Search by customer name for dues */}
+<div className="relative mb-2">
+  <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
+  <input
+    value={dueInvoiceSearch}
+    onChange={(e) => setDueInvoiceSearch(e.target.value)}
+    placeholder="Search by Customer Name"
+    className="w-full pl-9 pr-3 py-2 border rounded-lg"
+  />
+</div>
 
-              {dues.map(due => (
-                <div key={due.id} className="p-4 border border-gray-200 rounded-lg">
-                  <div className="flex justify-between items-start">
-                    <div>
-                      <p className="font-semibold text-gray-900">{due.customerName}</p>
-                      <p className="text-sm text-gray-600">Sale: {due.saleId}</p>
-                      <p className="text-xs text-gray-500">
-                        Created: {new Date(due.createdAt).toLocaleString('en-IN')}
-                      </p>
-                    </div>
-                    <div className="text-right">
-                      <p className="text-sm">Total: <span className="font-semibold">₹{due.total.toFixed(2)}</span></p>
-                      <p className="text-sm">Upfront: ₹{(due.upfrontPaid || 0).toFixed(2)}</p>
-                      <p className="text-lg font-bold text-red-600">Balance Due: ₹{due.balance.toFixed(2)}</p>
-                    </div>
-                  </div>
+{/* Filter dues by customer name */}
+{(() => {
+  const q = dueInvoiceSearch.trim().toLowerCase();
+  const visibleDues = q
+    ? dues.filter(d => String(d.customerName || '').toLowerCase().includes(q))
+    : dues;
 
-                  {due.payments && due.payments.length > 0 && (
-                    <div className="mt-2 text-xs text-gray-600">
-                      Collections: {due.payments.map(p => `₹${p.amount.toFixed(2)} on ${new Date(p.timestamp).toLocaleDateString('en-IN')}`).join(', ')}
-                    </div>
-                  )}
+  if (visibleDues.length === 0) {
+    return (
+      <div className="text-center text-gray-500 py-8">
+        No unpaid dues {q ? 'for that customer' : ''} 🎉
+      </div>
+    );
+  }
 
-                  <div className="mt-3 grid grid-cols-1 md:grid-cols-3 gap-3 items-end">
-                    
-                    <div className="md:col-span-1">
-                      <label className="block text-sm font-medium text-gray-700 mb-1">
-                        Amount to collect (₹)
-                      </label>
-                      <p className="text-xs text-gray-700 mt-1">*Max: ₹{due.balance.toFixed(2)}</p>
-                      <input
-                        type="number"
-                        min="1"
-                        step="1"
-                        max={due.balance}
-                        value={collectionInputs[due.id] ?? ''}
-                        onChange={(e) => {
-                          const v = e.target.value;
-                          setCollectionInputs(prev => ({ ...prev, [due.id]: v }));
-                        }}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
-                        placeholder={due.balance.toFixed(2)}
-                      />
-                      
-                    </div>
+  return visibleDues.map((due) => (
+    <div key={due.id} className="p-4 border border-gray-200 rounded-lg">
+      <div className="flex justify-between items-start">
+        <div>
+          <p className="font-semibold text-gray-900">{due.customerName}</p>
+          <p className="text-sm text-gray-600">Sale: {due.saleId}</p>
+          <p className="text-xs text-gray-500">
+            Created: {new Date(due.createdAt).toLocaleString('en-IN')}
+          </p>
+        </div>
+        <div className="text-right">
+          <p className="text-sm">
+            Total: <span className="font-semibold">₹{due.total.toFixed(2)}</span>
+          </p>
+          <p className="text-sm">
+            Upfront: ₹{(due.upfrontPaid || 0).toFixed(2)}{' '}
+            {due.upfrontTender ? `(${due.upfrontTender.toUpperCase()})` : ''}
+          </p>
+          <p className="text-lg font-bold text-red-600">
+            Balance Due: ₹{due.balance.toFixed(2)}
+          </p>
+        </div>
+      </div>
 
-                    <div className="flex gap-3 md:col-span-2">
-                      <button
-                        onClick={() => {
-                          const val = collectionInputs[due.id];
-                          collectDue(due, val);
-                        }}
-                        className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-                      >
-                        Collect
+      {due.payments && due.payments.length > 0 && (
+        <div className="mt-2 text-xs text-gray-600">
+          Collections:{' '}
+          {due.payments
+            .map(
+              (p) =>
+                `₹${p.amount.toFixed(2)} ${
+                  p.mode ? `(${p.mode.toUpperCase()})` : ''
+                } on ${new Date(p.timestamp).toLocaleDateString('en-IN')}`
+            )
+            .join(', ')}
+        </div>
+      )}
 
-                      </button>
-                      
-                    </div>
-                  </div>
-                </div>
-              ))}
+      <div className="mt-3 grid grid-cols-1 md:grid-cols-3 gap-3 items-end">
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">
+            Amount to collect (₹)
+          </label>
+          <p className="text-xs text-gray-700 mt-1">*Max: ₹{due.balance.toFixed(2)}</p>
+          <input
+            type="number"
+            min="1"
+            step="1"
+            max={due.balance}
+            value={collectionInputs[due.id] ?? ''}
+            onChange={(e) => {
+              const v = e.target.value;
+              setCollectionInputs((prev) => ({ ...prev, [due.id]: v }));
+            }}
+            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
+            placeholder={due.balance.toFixed(2)}
+          />
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">
+            Collection Mode
+          </label>
+          <select
+            value={collectionModes[due.id] ?? 'cash'}
+            onChange={(e) =>
+              setCollectionModes((prev) => ({ ...prev, [due.id]: e.target.value }))
+            }
+            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
+          >
+            <option value="cash">Cash</option>
+            <option value="upi">UPI</option>
+          </select>
+        </div>
+
+        <div className="flex gap-3 md:col-span-1">
+          <button
+            onClick={() => {
+              const val = collectionInputs[due.id];
+              const mode = collectionModes[due.id] ?? 'cash';
+              collectDue(due, val, mode);
+            }}
+            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+          >
+            Collect
+          </button>
+          <button
+            onClick={() => settleDue(due)}
+            className="px-4 py-2 bg-gray-100 text-gray-800 rounded-lg hover:bg-gray-200 transition-colors"
+          >
+            Settle Full
+          </button>
+        </div>
+      </div>
+    </div>
+  ));
+})()}
+
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Opening Cash Drawer Modal */}
+      {showDrawerModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-[60]">
+          <div className="bg-white rounded-xl shadow-xl max-w-sm w-full">
+            <div className="flex items-center justify-between p-6 border-b">
+              <h2 className="text-xl font-semibold">Opening Cash (Today)</h2>
+            </div>
+            <div className="p-6 space-y-4">
+              <p className="text-sm text-gray-600">
+                Please enter the cash amount present in the drawer at start of day.
+              </p>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Opening Cash (₹)
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  step="1"
+                  value={openingCashInput}
+                  onChange={(e) => setOpeningCashInput(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                  placeholder="e.g., 2000"
+                  autoFocus
+                />
+              </div>
+              <div className="flex gap-3 pt-2">
+                <button
+                  onClick={() => {
+                    setOpeningCashInput('0');
+                    submitOpeningCash();
+                  }}
+                  className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50"
+                >
+                  Start with ₹0
+                </button>
+                <button
+                  onClick={submitOpeningCash}
+                  className="flex-1 px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700"
+                >
+                  Save
+                </button>
+              </div>
             </div>
           </div>
         </div>
