@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useInventory } from '../contexts/InventoryContext';
 import { useSettings } from '../contexts/SettingsContext';
 import { useAuth } from '../contexts/AuthContext';
@@ -12,16 +12,16 @@ import {
   CreditCard,
   Banknote,
   RotateCcw,
-  TrendingUp,
-  TrendingDown,
   DollarSign,
   Printer,
   X,
-  ListChecks
+  ListChecks,
+  RefreshCw
 } from 'lucide-react';
 
 const POS = () => {
-  const { products, updateStock } = useInventory();
+  // Note: addProduct is used to create inventory items via Direct Bill
+  const { products, updateStock, addProduct } = useInventory();
   const { shopSettings } = useSettings();
   const { user } = useAuth();
 
@@ -38,7 +38,7 @@ const POS = () => {
   const [discountType, setDiscountType] = useState('amount');
   const [discountValue, setDiscountValue] = useState('');
 
-  // Two-step payment: first type (PAID or DUE), then mode (cash or upi)
+  // Two-step payment
   const [payType, setPayType] = useState('PAID'); // 'PAID' | 'DUE'
   const [payMode, setPayMode] = useState('cash'); // 'cash' | 'upi'
   const [amountPaid, setAmountPaid] = useState('');
@@ -61,15 +61,57 @@ const POS = () => {
   const [collectionInputs, setCollectionInputs] = useState({});
   const [collectionModes, setCollectionModes] = useState({}); // { [dueId]: 'cash' | 'upi' }
 
+  // ===== Direct Bill (Professional) =====
   const [directBillForm, setDirectBillForm] = useState({
     name: '',
+    brand: '',
+    size: '',
+    category: 'Direct Bill',
     price: '',
     quantity: 1,
-    brand: '',
-    size: ''
+    barcode: '',
   });
 
-  // Stats (unchanged logic)
+  // suggestions from existing catalog
+  const uniq = (arr) => Array.from(new Set(arr.filter(Boolean)));
+  const brandOptions = useMemo(() => uniq(products.map(p => p.brand)), [products]);
+  const sizeOptions = useMemo(() => uniq(products.map(p => p.size)), [products]);
+  const categoryOptions = useMemo(
+    () => uniq(['Direct Bill', ...products.map(p => p.category || 'Direct Bill')]),
+    [products]
+  );
+
+  // Auto barcode (NAME_BRAND) with uniqueness
+  const ucAlnum = (s) => (s || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+  const makeBaseBarcode = (name, brand) => {
+    const n = ucAlnum(name);
+    const b = ucAlnum(brand || 'GEN');
+    return n ? `${n}_${b}` : '';
+  };
+  const existingBarcodes = useMemo(
+    () => new Set(products.map(p => (p.barcode || '').toLowerCase())),
+    [products]
+  );
+  const uniqueBarcode = (base) => {
+    if (!base) return '';
+    if (!existingBarcodes.has(base.toLowerCase())) return base;
+    let i = 1;
+    while (true) {
+      const cand = `${base}_${String(i).padStart(2,'0')}`;
+      if (!existingBarcodes.has(cand.toLowerCase())) return cand;
+      i++;
+    }
+  };
+
+  useEffect(() => {
+    if (!showDirectBill) return;
+    const base = makeBaseBarcode(directBillForm.name, directBillForm.brand);
+    const next = uniqueBarcode(base);
+    setDirectBillForm(prev => ({ ...prev, barcode: next }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [directBillForm.name, directBillForm.brand, showDirectBill, products]);
+
+  // Stats
   const [todayStats, setTodayStats] = useState({
     sales: 0,
     returns: 0,
@@ -179,7 +221,7 @@ const POS = () => {
     const sales = JSON.parse(localStorage.getItem('pos_sales') || '[]');
     const sortedSales = sales.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
     setAllSales(sortedSales);                 // full list for searching
-    setRecentSales(sortedSales.slice(0, 20)); // keep quick recent list (if needed elsewhere)
+    setRecentSales(sortedSales.slice(0, 20)); // quick recent list
   };
 
   const computeOutstandingDue = (list) => {
@@ -201,7 +243,7 @@ const POS = () => {
       .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
     setDues(list);
 
-    // NEW: set outstanding total
+    // outstanding total
     setOutstandingDueTotal(parseFloat(computeOutstandingDue(list).toFixed(2)));
 
     const inputs = {};
@@ -325,45 +367,68 @@ const POS = () => {
     setCart(cart.filter((item) => item.id !== id));
   };
 
+  const resetDirectBillForm = () =>
+    setDirectBillForm({
+      name: '',
+      brand: '',
+      size: '',
+      category: 'Direct Bill',
+      price: '',
+      quantity: 1,
+      barcode: ''
+    });
+
+  // ===== DIRECT BILL: create product in inventory, then add to cart =====
   const handleDirectBillSubmit = (e) => {
     e.preventDefault();
-    const directItem = {
-      id: `direct_${Date.now()}`,
-      name: directBillForm.name,
-      price: parseFloat(directBillForm.price),
-      quantity: parseInt(directBillForm.quantity),
-      brand: directBillForm.brand,
-      size: directBillForm.size,
-      category: 'Direct Bill',
-      stock: 999,
-      discount: 0,
-      discountType: 'amount'
+
+    const name = directBillForm.name.trim();
+    const brand = directBillForm.brand.trim();
+    const size = directBillForm.size.trim();
+    const category = (directBillForm.category || 'Direct Bill').trim();
+    const qty = parseInt(directBillForm.quantity) || 1;
+    const price = parseFloat(directBillForm.price);
+
+    if (!name || isNaN(price) || price <= 0 || qty <= 0) {
+      alert('Please enter valid name, price (>0) and quantity (>=1).');
+      return;
+    }
+
+    // Ensure barcode (unique)
+    const base = makeBaseBarcode(name, brand);
+    const barcode = directBillForm.barcode || uniqueBarcode(base);
+
+    // Create inventory product with stock = qty
+    const newProduct = {
+      id: `inv_${Date.now()}`, // provide explicit id to keep sale/updateStock aligned
+      name,
+      brand,
+      size,
+      category,
+      barcode,
+      description: 'Created via Direct Bill',
+      price,
+      stock: qty,
+      minStock: 5,
+      supplier: '',
+      purchasePrice: null,
+      margin: ''
     };
 
-    setCart([...cart, directItem]);
-    setDirectBillForm({ name: '', price: '', quantity: 1, brand: '', size: '' });
+    try {
+      addProduct(newProduct);
+    } catch (err) {
+      console.error('addProduct failed:', err);
+    }
+
+    // Add to cart using same ID & barcode
+    setCart((prev) => [
+      ...prev,
+      { ...newProduct, quantity: qty, discount: 0, discountType: 'amount' }
+    ]);
+
+    resetDirectBillForm();
     setShowDirectBill(false);
-  };
-
-  const applyDiscount = () => {
-    if (!selectedItemForDiscount || !discountValue) return;
-
-    setCart(
-      cart.map((item) => {
-        if (item.id === selectedItemForDiscount.id) {
-          return {
-            ...item,
-            discount: parseFloat(discountValue),
-            discountType: discountType
-          };
-        }
-        return item;
-      })
-    );
-
-    setShowDiscountModal(false);
-    setSelectedItemForDiscount(null);
-    setDiscountValue('');
   };
 
   const calculateItemTotal = (item) => {
@@ -406,12 +471,20 @@ const POS = () => {
       id: `COL${Date.now()}`,
       dueId,
       amount,
-      mode, // 'cash' | 'upi'
+      mode,
       timestamp: new Date().toISOString(),
       cashier: user.name
     });
     localStorage.setItem('pos_due_payments', JSON.stringify(payments));
   };
+
+  // Helper to find product in catalog by id OR barcode (robust for direct-billed items)
+  const findProductInCatalog = (item) =>
+    products.find(
+      (p) =>
+        p.id === item.id ||
+        (!!item.barcode && !!p.barcode && p.barcode.toLowerCase() === item.barcode.toLowerCase())
+    );
 
   const processSale = () => {
     if (cart.length === 0) {
@@ -421,7 +494,6 @@ const POS = () => {
 
     const totals = calculateTotals();
 
-    // Defaults for amountPaid based on type
     const defaultPaid = payType === 'PAID' ? totals.total : 0;
     const paidAmount = parseFloat(amountPaid) || defaultPaid;
 
@@ -455,7 +527,6 @@ const POS = () => {
       }
     }
 
-    // Build sale object
     const salePaymentMethod = payType === 'PAID' ? payMode : 'DUE';
 
     const sale = {
@@ -479,13 +550,11 @@ const POS = () => {
       customerName: payType === 'DUE' ? customerName.trim() : undefined
     };
 
-    // Update stock
+    // Update stock (by id or by barcode)
     cart.forEach((item) => {
-      if (!item.id.startsWith('direct_')) {
-        const product = products.find((p) => p.id === item.id);
-        if (product) {
-          updateStock(item.id, product.stock - item.quantity);
-        }
+      const product = findProductInCatalog(item);
+      if (product) {
+        updateStock(product.id, product.stock - item.quantity);
       }
     });
 
@@ -505,7 +574,7 @@ const POS = () => {
           customerName: customerName.trim(),
           total: totals.total,
           upfrontPaid: sale.amountPaid,
-          upfrontTender: payMode, // 'cash' | 'upi'
+          upfrontTender: payMode,
           balance: remaining,
           createdAt: sale.timestamp,
           settled: false,
@@ -519,7 +588,7 @@ const POS = () => {
     // Drawer & Tender updates
     if (payType === 'PAID') {
       if (payMode === 'cash') {
-        updateDrawer(totals.total); // full amount enters drawer
+        updateDrawer(totals.total);
         bumpCashTotal(totals.total);
       } else {
         bumpUPITotal(totals.total);
@@ -536,17 +605,15 @@ const POS = () => {
       }
     }
 
-    // Print receipt (unchanged)
     printSaleReceipt(sale);
 
-    // Reset & reload
     setCart([]);
     setAmountPaid('');
     setCustomerName('');
     setPayMode('cash');
     setPayType('PAID');
     loadRecentSales();
-    loadDues();            // updates outstandingDueTotal as well
+    loadDues();
     calculateTodayStats();
     loadDailyTenders();
 
@@ -735,7 +802,7 @@ const POS = () => {
       if (sale.id === selectedSaleForReturn.id) {
         const updatedItems = sale.items
           .map((saleItem) => {
-            const ri = returnItems.find((r) => r.id === saleItem.id);
+            const ri = returnItems.find((r) => r.id === saleItem.id || r.barcode === saleItem.barcode);
             if (ri) {
               const remaining = saleItem.quantity - ri.returnQuantity;
               return remaining > 0 ? { ...saleItem, quantity: remaining } : null;
@@ -774,18 +841,11 @@ const POS = () => {
 
     localStorage.setItem('pos_sales', JSON.stringify(updatedSales));
 
-    // Save return
-    const returns = JSON.parse(localStorage.getItem('pos_returns') || '[]');
-    returns.push(returnTransaction);
-    localStorage.setItem('pos_returns', JSON.stringify(returns));
-
-    // Update stock
+    // Update stock (by id or by barcode)
     returnItems.forEach((item) => {
-      if (!item.id.startsWith('direct_')) {
-        const product = products.find((p) => p.id === item.id);
-        if (product) {
-          updateStock(item.id, product.stock + item.returnQuantity);
-        }
+      const product = findProductInCatalog(item);
+      if (product) {
+        updateStock(product.id, product.stock + item.returnQuantity);
       }
     });
 
@@ -960,7 +1020,7 @@ const POS = () => {
         const payment = {
           id: `PAY${Date.now()}`,
           amount: amt,
-          mode, // 'cash' | 'upi'
+          mode,
           timestamp: new Date().toISOString(),
           cashier: user.name
         };
@@ -1036,7 +1096,7 @@ const POS = () => {
           </div>
         </div>
 
-        {/* NEW: Outstanding Dues (till now) */}
+        {/* Outstanding Dues */}
         <div className="bg-gradient-to-r from-slate-500 to-slate-600 rounded-xl shadow-sm p-4 text-white">
           <div className="flex items-center justify-between">
             <div>
@@ -1050,8 +1110,7 @@ const POS = () => {
       </div>
 
       {/* Dues & Returns row */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4"></div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Product Search and Cart */}
@@ -1334,120 +1393,161 @@ const POS = () => {
         </div>
       </div>
 
-      {/* Direct Bill Modal */}
+      {/* ===== Direct Bill Modal (Professional) ===== */}
       {showDirectBill && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-xl shadow-xl max-w-md w-full">
-            <div className="flex items-center justify-between p-6 border-b">
-              <h2 className="text-xl font-semibold">Direct Bill Item</h2>
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-lg">
+            {/* Header */}
+            <div className="flex items-center justify-between p-6 border-b bg-gradient-to-r from-emerald-50 to-teal-50">
+              <div className="flex items-center gap-3">
+                <div className="p-2 rounded-lg bg-emerald-100 text-emerald-700">
+                  <ShoppingCart className="w-5 h-5" />
+                </div>
+                <div>
+                  <h2 className="text-lg font-semibold text-gray-900">Direct Bill Item</h2>
+                  <p className="text-xs text-gray-600">Creates product in inventory and adds to cart</p>
+                </div>
+              </div>
               <button
-                onClick={() => setShowDirectBill(false)}
+                onClick={() => { resetDirectBillForm(); setShowDirectBill(false); }}
                 className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
+            {/* Form */}
             <form onSubmit={handleDirectBillSubmit} className="p-6 space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Product Name *
-                </label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Product Name *</label>
                 <input
                   type="text"
                   value={directBillForm.name}
-                  onChange={(e) =>
-                    setDirectBillForm({ ...directBillForm, name: e.target.value })
-                  }
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  onChange={(e) => setDirectBillForm({ ...directBillForm, name: e.target.value })}
                   placeholder="e.g., Custom Leather Shoes"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
                   required
                 />
               </div>
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Price (₹) *
-                  </label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Brand</label>
                   <input
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    value={directBillForm.price}
-                    onChange={(e) =>
-                      setDirectBillForm({ ...directBillForm, price: e.target.value })
-                    }
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    required
+                    list="db_brands"
+                    value={directBillForm.brand}
+                    onChange={(e) => setDirectBillForm({ ...directBillForm, brand: e.target.value })}
+                    placeholder="Brand name"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
                   />
+                  <datalist id="db_brands">
+                    {brandOptions.map(b => <option key={b} value={b} />)}
+                  </datalist>
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Quantity *
-                  </label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Size</label>
                   <input
-                    type="number"
-                    min="1"
-                    value={directBillForm.quantity}
-                    onChange={(e) =>
-                      setDirectBillForm({
-                        ...directBillForm,
-                        quantity: parseInt(e.target.value) || 1
-                      })
-                    }
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    required
+                    list="db_sizes"
+                    value={directBillForm.size}
+                    onChange={(e) => setDirectBillForm({ ...directBillForm, size: e.target.value })}
+                    placeholder="Size"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
                   />
+                  <datalist id="db_sizes">
+                    {sizeOptions.map(s => <option key={s} value={s} />)}
+                  </datalist>
                 </div>
               </div>
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Brand
-                  </label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Category</label>
                   <input
-                    type="text"
-                    value={directBillForm.brand}
-                    onChange={(e) =>
-                      setDirectBillForm({ ...directBillForm, brand: e.target.value })
-                    }
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    placeholder="Brand name"
+                    list="db_categories"
+                    value={directBillForm.category}
+                    onChange={(e) => setDirectBillForm({ ...directBillForm, category: e.target.value })}
+                    placeholder="Direct Bill"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
+                  />
+                  <datalist id="db_categories">
+                    {categoryOptions.map(c => <option key={c} value={c} />)}
+                  </datalist>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Barcode (Auto)</label>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={directBillForm.barcode}
+                      readOnly
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-50 font-mono text-sm"
+                      placeholder="AUTO: NAME_BRAND"
+                    />
+                    <button
+                      type="button"
+                      title="Regenerate"
+                      onClick={() => {
+                        const base = makeBaseBarcode(directBillForm.name, directBillForm.brand);
+                        setDirectBillForm(prev => ({ ...prev, barcode: uniqueBarcode(base) }));
+                      }}
+                      className="px-3 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
+                    >
+                      <RefreshCw className="w-4 h-4" />
+                    </button>
+                  </div>
+                  <p className="text-[11px] text-gray-500 mt-1">
+                    Generated as <code className="font-mono">NAME_BRAND</code>. Duplicates get <code className="font-mono">_01</code>, <code className="font-mono">_02</code> …
+                  </p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Price (₹) *</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={directBillForm.price}
+                    onChange={(e) => setDirectBillForm({ ...directBillForm, price: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
+                    required
                   />
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Size
-                  </label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Quantity *</label>
                   <input
-                    type="text"
-                    value={directBillForm.size}
+                    type="number"
+                    min="1"
+                    value={directBillForm.quantity}
                     onChange={(e) =>
-                      setDirectBillForm({ ...directBillForm, size: e.target.value })
+                      setDirectBillForm({ ...directBillForm, quantity: parseInt(e.target.value) || 1 })
                     }
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    placeholder="Size"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
+                    required
                   />
+                  <p className="text-[11px] text-gray-500 mt-1">
+                    Product will be created with this stock, then reduced by sale.
+                  </p>
                 </div>
               </div>
 
-              <div className="flex gap-3 pt-4">
+              <div className="flex gap-3 pt-2">
                 <button
                   type="button"
-                  onClick={() => setShowDirectBill(false)}
+                  onClick={() => { resetDirectBillForm(); setShowDirectBill(false); }}
                   className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="flex-1 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
+                  className="flex-1 px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors"
                 >
-                  Add to Cart
+                  Add & Create in Inventory
                 </button>
               </div>
             </form>
@@ -1575,7 +1675,7 @@ const POS = () => {
                 <div>
                   <h3 className="text-lg font-medium mb-4">Select Sale to Return</h3>
 
-                  {/* NEW: Invoice search for returns */}
+                  {/* Invoice search for returns */}
                   <div className="relative mb-4">
                     <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
                     <input
@@ -1586,7 +1686,7 @@ const POS = () => {
                     />
                   </div>
 
-                  {/* NEW: filtered list by invoice */}
+                  {/* filtered list by invoice */}
                   {(() => {
                     const q = returnInvoiceSearch.trim().toLowerCase();
                     const saleSource = q
@@ -1769,128 +1869,128 @@ const POS = () => {
 
             <div className="p-6 space-y-3">
               {/* Search by customer name for dues */}
-<div className="relative mb-2">
-  <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
-  <input
-    value={dueInvoiceSearch}
-    onChange={(e) => setDueInvoiceSearch(e.target.value)}
-    placeholder="Search by Customer Name"
-    className="w-full pl-9 pr-3 py-2 border rounded-lg"
-  />
-</div>
+              <div className="relative mb-2">
+                <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  value={dueInvoiceSearch}
+                  onChange={(e) => setDueInvoiceSearch(e.target.value)}
+                  placeholder="Search by Customer Name"
+                  className="w-full pl-9 pr-3 py-2 border rounded-lg"
+                />
+              </div>
 
-{/* Filter dues by customer name */}
-{(() => {
-  const q = dueInvoiceSearch.trim().toLowerCase();
-  const visibleDues = q
-    ? dues.filter(d => String(d.customerName || '').toLowerCase().includes(q))
-    : dues;
+              {/* Filter dues by customer name */}
+              {(() => {
+                const q = dueInvoiceSearch.trim().toLowerCase();
+                const visibleDues = q
+                  ? dues.filter(d => String(d.customerName || '').toLowerCase().includes(q))
+                  : dues;
 
-  if (visibleDues.length === 0) {
-    return (
-      <div className="text-center text-gray-500 py-8">
-        No unpaid dues {q ? 'for that customer' : ''} 🎉
-      </div>
-    );
-  }
+                if (visibleDues.length === 0) {
+                  return (
+                    <div className="text-center text-gray-500 py-8">
+                      No unpaid dues {q ? 'for that customer' : ''} 🎉
+                    </div>
+                  );
+                }
 
-  return visibleDues.map((due) => (
-    <div key={due.id} className="p-4 border border-gray-200 rounded-lg">
-      <div className="flex justify-between items-start">
-        <div>
-          <p className="font-semibold text-gray-900">{due.customerName}</p>
-          <p className="text-sm text-gray-600">Sale: {due.saleId}</p>
-          <p className="text-xs text-gray-500">
-            Created: {new Date(due.createdAt).toLocaleString('en-IN')}
-          </p>
-        </div>
-        <div className="text-right">
-          <p className="text-sm">
-            Total: <span className="font-semibold">₹{due.total.toFixed(2)}</span>
-          </p>
-          <p className="text-sm">
-            Upfront: ₹{(due.upfrontPaid || 0).toFixed(2)}{' '}
-            {due.upfrontTender ? `(${due.upfrontTender.toUpperCase()})` : ''}
-          </p>
-          <p className="text-lg font-bold text-red-600">
-            Balance Due: ₹{due.balance.toFixed(2)}
-          </p>
-        </div>
-      </div>
+                return visibleDues.map((due) => (
+                  <div key={due.id} className="p-4 border border-gray-200 rounded-lg">
+                    <div className="flex justify-between items-start">
+                      <div>
+                        <p className="font-semibold text-gray-900">{due.customerName}</p>
+                        <p className="text-sm text-gray-600">Sale: {due.saleId}</p>
+                        <p className="text-xs text-gray-500">
+                          Created: {new Date(due.createdAt).toLocaleString('en-IN')}
+                        </p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-sm">
+                          Total: <span className="font-semibold">₹{due.total.toFixed(2)}</span>
+                        </p>
+                        <p className="text-sm">
+                          Upfront: ₹{(due.upfrontPaid || 0).toFixed(2)}{' '}
+                          {due.upfrontTender ? `(${due.upfrontTender.toUpperCase()})` : ''}
+                        </p>
+                        <p className="text-lg font-bold text-red-600">
+                          Balance Due: ₹{due.balance.toFixed(2)}
+                        </p>
+                      </div>
+                    </div>
 
-      {due.payments && due.payments.length > 0 && (
-        <div className="mt-2 text-xs text-gray-600">
-          Collections:{' '}
-          {due.payments
-            .map(
-              (p) =>
-                `₹${p.amount.toFixed(2)} ${
-                  p.mode ? `(${p.mode.toUpperCase()})` : ''
-                } on ${new Date(p.timestamp).toLocaleDateString('en-IN')}`
-            )
-            .join(', ')}
-        </div>
-      )}
+                    {due.payments && due.payments.length > 0 && (
+                      <div className="mt-2 text-xs text-gray-600">
+                        Collections:{' '}
+                        {due.payments
+                          .map(
+                            (p) =>
+                              `₹${p.amount.toFixed(2)} ${
+                                p.mode ? `(${p.mode.toUpperCase()})` : ''
+                              } on ${new Date(p.timestamp).toLocaleDateString('en-IN')}`
+                          )
+                          .join(', ')}
+                      </div>
+                    )}
 
-      <div className="mt-3 grid grid-cols-1 md:grid-cols-3 gap-3 items-end">
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">
-            Amount to collect (₹)
-          </label>
-          <p className="text-xs text-gray-700 mt-1">*Max: ₹{due.balance.toFixed(2)}</p>
-          <input
-            type="number"
-            min="1"
-            step="1"
-            max={due.balance}
-            value={collectionInputs[due.id] ?? ''}
-            onChange={(e) => {
-              const v = e.target.value;
-              setCollectionInputs((prev) => ({ ...prev, [due.id]: v }));
-            }}
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
-            placeholder={due.balance.toFixed(2)}
-          />
-        </div>
+                    <div className="mt-3 grid grid-cols-1 md:grid-cols-3 gap-3 items-end">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                          Amount to collect (₹)
+                        </label>
+                        <p className="text-xs text-gray-700 mt-1">*Max: ₹{due.balance.toFixed(2)}</p>
+                        <input
+                          type="number"
+                          min="1"
+                          step="1"
+                          max={due.balance}
+                          value={collectionInputs[due.id] ?? ''}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            setCollectionInputs((prev) => ({ ...prev, [due.id]: v }));
+                          }}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
+                          placeholder={due.balance.toFixed(2)}
+                        />
+                      </div>
 
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">
-            Collection Mode
-          </label>
-          <select
-            value={collectionModes[due.id] ?? 'cash'}
-            onChange={(e) =>
-              setCollectionModes((prev) => ({ ...prev, [due.id]: e.target.value }))
-            }
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
-          >
-            <option value="cash">Cash</option>
-            <option value="upi">UPI</option>
-          </select>
-        </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                          Collection Mode
+                        </label>
+                        <select
+                          value={collectionModes[due.id] ?? 'cash'}
+                          onChange={(e) =>
+                            setCollectionModes((prev) => ({ ...prev, [due.id]: e.target.value }))
+                          }
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
+                        >
+                          <option value="cash">Cash</option>
+                          <option value="upi">UPI</option>
+                        </select>
+                      </div>
 
-        <div className="flex gap-3 md:col-span-1">
-          <button
-            onClick={() => {
-              const val = collectionInputs[due.id];
-              const mode = collectionModes[due.id] ?? 'cash';
-              collectDue(due, val, mode);
-            }}
-            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-          >
-            Collect
-          </button>
-          <button
-            onClick={() => settleDue(due)}
-            className="px-4 py-2 bg-gray-100 text-gray-800 rounded-lg hover:bg-gray-200 transition-colors"
-          >
-            Settle Full
-          </button>
-        </div>
-      </div>
-    </div>
-  ));
-})()}
+                      <div className="flex gap-3 md:col-span-1">
+                        <button
+                          onClick={() => {
+                            const val = collectionInputs[due.id];
+                            const mode = collectionModes[due.id] ?? 'cash';
+                            collectDue(due, val, mode);
+                          }}
+                          className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+                        >
+                          Collect
+                        </button>
+                        <button
+                          onClick={() => settleDue(due)}
+                          className="px-4 py-2 bg-gray-100 text-gray-800 rounded-lg hover:bg-gray-200 transition-colors"
+                        >
+                          Settle Full
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ));
+              })()}
 
             </div>
           </div>
