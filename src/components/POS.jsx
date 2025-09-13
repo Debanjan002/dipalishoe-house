@@ -464,6 +464,46 @@ const POS = () => {
     };
   };
 
+  // ===== Discount handler (FIX) =====
+  const applyDiscount = () => {
+    if (!selectedItemForDiscount) return;
+
+    const raw = parseFloat(discountValue);
+    if (isNaN(raw) || raw < 0) {
+      alert('Enter a valid non-negative discount.');
+      return;
+    }
+
+    setCart(prev =>
+      prev.map(it => {
+        const isSameItem =
+          it.id === selectedItemForDiscount.id ||
+          (
+            it.barcode &&
+            selectedItemForDiscount.barcode &&
+            it.barcode.toLowerCase() === selectedItemForDiscount.barcode.toLowerCase()
+          );
+
+        if (!isSameItem) return it;
+
+        const baseTotal = it.price * it.quantity;
+
+        if (discountType === 'percentage') {
+          const pct = Math.min(100, raw); // clamp 0–100
+          return { ...it, discountType: 'percentage', discount: pct };
+        } else {
+          const amt = Math.min(baseTotal, raw); // don’t exceed line total
+          return { ...it, discountType: 'amount', discount: amt };
+        }
+      })
+    );
+
+    // reset & close modal
+    setShowDiscountModal(false);
+    setSelectedItemForDiscount(null);
+    setDiscountValue('');
+  };
+
   // record due payment (collections)
   const recordDueCollection = (dueId, amount, mode) => {
     const payments = JSON.parse(localStorage.getItem('pos_due_payments') || '[]');
@@ -1004,7 +1044,7 @@ const POS = () => {
       alert('Invalid amount entered!');
       return;
     }
-    if (amt > due.balance) {
+       if (amt > due.balance) {
       alert('Amount cannot exceed remaining balance!');
       return;
     }

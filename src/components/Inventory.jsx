@@ -670,7 +670,7 @@ const Inventory = () => {
               <label className="text-sm text-yellow-800">Low-stock threshold:</label>
               <input
                 type="number"
-                min="1"
+                min="0"
                 value={lowStockThreshold}
                 onChange={(e) => setLowStockThreshold(Math.max(1, parseInt(e.target.value || '1', 10)))}
                 className="w-20 px-2 py-1 border border-yellow-300 rounded"
