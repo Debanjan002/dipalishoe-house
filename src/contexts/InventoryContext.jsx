@@ -12,7 +12,7 @@ export const useInventory = () => {
 
 export const InventoryProvider = ({ children }) => {
   const [products, setProducts] = useState([]);
-  const [categories, setCategories] = useState(['Gent\'s Slipper', 'Gent\'s Belt', 'Gent\'s Hawai', 'Gent\'s Shoe', 'Ledie\'s Slipper', 'Ledie\'s Belt', 'ledie\'s Hawai', 'Ledis\'s Shoe', 'Kids Hawai', 'kids belt','kids Shoe','DR. Hawai', 'local', 'Accessories']);
+  const [categories, setCategories] = useState(['Gent\'s Slipper', 'Gent\'s Belt', 'Gent\'s Hawai', 'Gent\'s Shoe', 'Ledie\'s Slipper', 'Ledie\'s Belt', 'ledie\'s Hawai', 'Ledis\'s Shoe', 'Kids Hawai', 'kids BOYS belt','kids GIRLS belt','kids BOYS Shoe', 'kids GIRLS Shoe','kids BOYS SLIPPERS','kids GIRLS SLIPPERS','DR. Hawai', 'local', 'Accessories']);
 
   useEffect(() => {
     loadProducts();
