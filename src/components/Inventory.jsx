@@ -652,56 +652,6 @@ const Inventory = () => {
       </div>
 
       {/* Low Stock Alert (closable + threshold control) */}
-      {showLowPanel && lowStockProductsLocal.length > 0 && (
-        <div className="bg-gradient-to-r from-yellow-50 to-orange-50 border border-yellow-200 rounded-xl p-6">
-          <div className="flex items-start justify-between mb-3">
-            <div className="flex items-center gap-2">
-              <AlertTriangle className="w-6 h-6 text-yellow-600" />
-              <h3 className="font-semibold text-yellow-800">Low Stock Alert</h3>
-            </div>
-
-          </div>
-
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-3">
-            <p className="text-yellow-700">
-              {lowStockProductsLocal.length} product(s) are running low on stock.
-            </p>
-            <div className="flex items-center gap-2">
-              <label className="text-sm text-yellow-800">Low-stock threshold:</label>
-              <input
-                type="number"
-                min="0"
-                value={lowStockThreshold}
-                onChange={(e) => setLowStockThreshold(Math.max(1, parseInt(e.target.value || '1', 10)))}
-                className="w-20 px-2 py-1 border border-yellow-300 rounded"
-              />
-              <button
-                onClick={() => setLowStockThreshold(1)}
-                className="px-3 py-1 text-sm border border-yellow-300 rounded hover:bg-yellow-100"
-                title="Set to 1"
-              >
-                Set 1
-              </button>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-            {lowStockProductsLocal.map(product => (
-              <div key={product.id} className="bg-white rounded-lg p-3 border border-yellow-200">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="font-medium text-gray-900 text-sm">{product.name}</p>
-                    <p className="text-xs text-gray-600">{product.brand} - {product.category}</p>
-                  </div>
-                  <span className="bg-red-100 text-red-800 text-xs px-2 py-1 rounded-full font-medium">
-                    {product.stock} left
-                  </span>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
 
       {/* Header with Controls */}
       <div className="bg-white rounded-xl shadow-sm p-6">
