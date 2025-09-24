@@ -51,6 +51,8 @@ const Settings = () => {
     const data = {
       products: JSON.parse(localStorage.getItem('pos_products') || '[]'),
       sales: JSON.parse(localStorage.getItem('pos_sales') || '[]'),
+      dues: JSON.parse(localStorage.getItem('pos_dues') || '[]'),
+      duePayments: JSON.parse(localStorage.getItem('pos_due_payments') || '[]'),
       users: JSON.parse(localStorage.getItem('pos_users') || '[]'),
       settings: {
         shop: shopSettings,
@@ -78,6 +80,8 @@ const Settings = () => {
         
         if (data.products) localStorage.setItem('pos_products', JSON.stringify(data.products));
         if (data.sales) localStorage.setItem('pos_sales', JSON.stringify(data.sales));
+        if (data.dues) localStorage.setItem('pos_dues', JSON.stringify(data.dues));
+        if (data.duePayments) localStorage.setItem('pos_due_payments', JSON.stringify(data.duePayments));
         if (data.users) localStorage.setItem('pos_users', JSON.stringify(data.users));
         if (data.settings?.shop) updateShopSettings(data.settings.shop);
         if (data.settings?.printer) updatePrinterSettings(data.settings.printer);
@@ -689,7 +693,7 @@ const Settings = () => {
                     <li>• Import will overwrite all existing data</li>
                     <li>• Make sure the import file is from the same POS system</li>
                     <li>• Refresh the page after importing data</li>
-                    <li>• Returns data is also included in export/import</li>
+                    <li>• Returns and dues (including collections) are included in export/import</li>
                   </ul>
                 </div>
               </div>
