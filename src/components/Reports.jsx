@@ -504,7 +504,7 @@ const Reports = () => {
           return id.includes(q) || pm.includes(q) || items;
         })
       : filteredSales;
-    return list.slice(-12).reverse();
+    return list.slice(-100).reverse();
   }, [filteredSales, saleQuery]);
 
   return (

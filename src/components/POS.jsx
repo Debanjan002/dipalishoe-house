@@ -37,6 +37,8 @@ const POS = () => {
   const [showExpenseModal, setShowExpenseModal] = useState(false);
   const [expenseAmount, setExpenseAmount] = useState('');
   const [expenseReason, setExpenseReason] = useState('');
+  const [todaysExpenses, setTodaysExpenses] = useState([]);
+  const [todaysExpenseTotal, setTodaysExpenseTotal] = useState(0);
 
   // Discount modal
   const [showDiscountModal, setShowDiscountModal] = useState(false);
@@ -985,11 +987,31 @@ const POS = () => {
     // Deduct from drawer and cash totals
     updateDrawer(-amt);
     bumpCashTotal(-amt);
+    refreshTodayExpenses();
     setShowExpenseModal(false);
     setExpenseAmount('');
     setExpenseReason('');
     alert('Expense recorded. Cash deducted from drawer.');
   };
+
+  const refreshTodayExpenses = () => {
+    try {
+      const list = JSON.parse(localStorage.getItem('pos_expenses') || '[]');
+      const today = todayStr();
+      const todays = list
+        .filter((r) => new Date(r.timestamp).toLocaleDateString('en-CA') === today)
+        .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+      setTodaysExpenses(todays);
+      setTodaysExpenseTotal(todays.reduce((s, r) => s + (Number(r.amount) || 0), 0));
+    } catch {
+      setTodaysExpenses([]);
+      setTodaysExpenseTotal(0);
+    }
+  };
+
+  useEffect(() => {
+    if (showExpenseModal) refreshTodayExpenses();
+  }, [showExpenseModal]);
   return (
     <div className="space-y-6">
       {/* Dashboard */}
@@ -1070,7 +1092,7 @@ const POS = () => {
             </div>
 
             {/* Product Grid */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 max-h-96 overflow-y-auto">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 max-h-9 overflow-y-auto">
               {filteredProducts.map((product) => (
                 <div
                   key={product.id}
@@ -1755,6 +1777,30 @@ const POS = () => {
                   className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-red-500"
                   placeholder="e.g., Packing material"
                 />
+              </div>
+              <div className="mt-4 border-t pt-3">
+                <div className="flex justify-between items-center mb-2">
+                  <h3 className="text-sm font-semibold text-gray-900">Today's Expenses</h3>
+                  <span className="text-sm font-medium">₹{todaysExpenseTotal.toFixed(2)}</span>
+                </div>
+                {todaysExpenses.length === 0 ? (
+                  <div className="text-sm text-gray-500">No expenses recorded today</div>
+                ) : (
+                  <div className="max-h-40 overflow-y-auto divide-y">
+                    {todaysExpenses.map((ex) => (
+                      <div key={ex.id} className="py-2 text-sm flex justify-between items-start">
+                        <div className="min-w-0">
+                          <div className="font-medium text-gray-900 truncate">₹{Number(ex.amount).toFixed(2)}</div>
+                          <div className="text-gray-600 truncate">{ex.reason || '-'}</div>
+                        </div>
+                        <div className="text-right text-xs text-gray-500">
+                          <div>{new Date(ex.timestamp).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}</div>
+                          <div>{ex.cashier || ''}</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
               <div className="flex gap-3 pt-2">
                 <button
