@@ -177,41 +177,51 @@ const Reports = () => {
   const averageTransactionValue = totalTransactions > 0 ? totalRevenue / totalTransactions : 0;
   const totalTax = filteredSales.reduce((s, x) => s + (Number(x.tax) || 0), 0);
 
-  // Range-aware tender/due
-  const paidCash = filteredSales
-    .filter((s) => s.paymentMethod === 'cash')
-    .reduce((sum, s) => sum + (Number(s.total) || 0), 0);
-  const paidUPI = filteredSales
-    .filter((s) => s.paymentMethod === 'upi')
-    .reduce((sum, s) => sum + (Number(s.total) || 0), 0);
+  // Range-aware tender/due (supports MIXED + change handling)
+  // Sum cash actually received from sales in range (net of change for PAID sales)
+  const saleCashInRange = filteredSales.reduce((sum, s) => {
+    const cashFromPayments = (s.paymentBreakdown || [])
+      .filter((p) => (p.mode || '').toLowerCase() === 'cash')
+      .reduce((ps, p) => ps + (Number(p.amount) || 0), 0);
+    const change = Number(s.change) || 0;
+    const isDue = String(s.paymentMethod || '').toUpperCase() === 'DUE';
+    // For PAID: only net cash stays in drawer; for DUE upfront we keep full cash
+    const netCash = isDue ? cashFromPayments : Math.max(0, cashFromPayments - change);
+    return sum + netCash;
+  }, 0);
 
+  // Sum UPI received from sales in range
+  const saleUpiInRange = filteredSales.reduce((sum, s) => {
+    const upiFromPayments = (s.paymentBreakdown || [])
+      .filter((p) => (p.mode || '').toLowerCase() === 'upi')
+      .reduce((ps, p) => ps + (Number(p.amount) || 0), 0);
+    return sum + upiFromPayments;
+  }, 0);
+
+  // Dues created in range (for KPI only; not used for tender sums)
   const duesCreatedInRange = (allDues || []).filter((d) => inRange(d.createdAt));
   const dueCreatedAmount = duesCreatedInRange.reduce(
     (sum, d) => sum + (Number(d.total || 0) - Number(d.upfrontPaid || 0)),
     0
   );
 
-  const upfrontCash = duesCreatedInRange
-    .filter((d) => d.upfrontTender === 'cash')
-    .reduce((sum, d) => sum + (Number(d.upfrontPaid) || 0), 0);
-  const upfrontUPI = duesCreatedInRange
-    .filter((d) => d.upfrontTender === 'upi')
-    .reduce((sum, d) => sum + (Number(d.upfrontPaid) || 0), 0);
-
+  // Due collections within range
   const duePayInRange = (duePayments || []).filter((p) => inRange(p.timestamp));
   const dueCashCollected = duePayInRange
-    .filter((p) => p.mode === 'cash')
+    .filter((p) => (p.mode || '').toLowerCase() === 'cash')
     .reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
   const dueUPICollected = duePayInRange
-    .filter((p) => p.mode === 'upi')
+    .filter((p) => (p.mode || '').toLowerCase() === 'upi')
     .reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
 
+  // Cash refunds from returns reduce cash in drawer
   const cashRefunds = (returns || [])
     .filter((r) => inRange(r.timestamp))
     .reduce((sum, r) => sum + (Number(r.totalRefund) || 0), 0);
 
-  const cashInRange = paidCash + upfrontCash + dueCashCollected - cashRefunds;
-  const upiInRange = paidUPI + upfrontUPI + dueUPICollected;
+  // Final tender totals for the selected range
+  const cashInRange = saleCashInRange + dueCashCollected - cashRefunds;
+  const upiInRange = saleUpiInRange + dueUPICollected;
 
   const outstandingDue = (allDues || []).reduce((sum, d) => sum + (Number(d.balance) || 0), 0);
 
