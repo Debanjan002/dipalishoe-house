@@ -1102,6 +1102,9 @@ const POS = () => {
                   <h3 className="font-medium text-gray-900 mb-1 text-sm">{product.name}</h3>
                   <p className="text-xs text-gray-600 mb-2">{product.brand} - {product.category}</p>
                   {product.size && <p className="text-xs text-gray-500 mb-2">Size: {product.size}</p>}
+                  {product.purchasePrice !== null && product.purchasePrice !== undefined && product.purchasePrice !== '' && Number(product.purchasePrice) > 0 && (
+                    <p className="text-lg text-green-500 mb-2">Purchase: ₹{Number(product.purchasePrice).toFixed(2)}</p>
+                  )}
                   <div className="flex justify-between items-center">
                     <span className="font-bold text-blue-600">₹{product.price.toFixed(2)}</span>
                     <span
