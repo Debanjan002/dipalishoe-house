@@ -712,7 +712,6 @@ const POS = () => {
   </div>
   <div class="center">!!SCAN TO select Your shoe Online!!</div>
   <div class="center sub no-break">
-    <div>𝓢𝓐𝓛𝓔 𝓢𝓣𝓐𝓡𝓣𝓘𝓝𝓖 𝓕𝓡𝓞𝓜 21 𝓢𝓔𝓟𝓣𝓔𝓜𝓑𝓔𝓡</div>
     <div>Thank you for shopping!</div>
     <div>Visit again soon!</div>
     <div>Powered by Dipali Shoe House</div>
