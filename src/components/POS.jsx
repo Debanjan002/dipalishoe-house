@@ -3,9 +3,11 @@ import { useInventory } from '../contexts/InventoryContext';
 import { useSettings } from '../contexts/SettingsContext';
 import { useAuth } from '../contexts/AuthContext';
 import Payment from './payment';
+import QrWebcamScanner from './QrWebcamScanner';
 
 import {
   Search,
+  Camera,
   Plus,
   Minus,
   Trash2,
@@ -32,6 +34,7 @@ const POS = () => {
   const [showReturns, setShowReturns] = useState(false);
   const [showDues, setShowDues] = useState(false);
   const [showPayment, setShowPayment] = useState(false);
+  const [showScanModal, setShowScanModal] = useState(false);
 
   // Cash expense modal
   const [showExpenseModal, setShowExpenseModal] = useState(false);
@@ -79,6 +82,7 @@ const POS = () => {
   );
   // Barcode helpers
   const ucAlnum = (s) => (s || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+  const norm = (s) => (s || '').trim().toLowerCase();
   const makeBaseBarcode = (name, brand) => {
     const n = ucAlnum(name);
     const b = ucAlnum(brand || 'GEN');
@@ -286,18 +290,72 @@ const POS = () => {
   }, [products, searchTerm]);
 
   // Cart helpers (skip stock checks for non-inventory items)
-  const addToCart = (product) => {
+  // A QR scan selects a specific physical shoe unit. Manual product-card adds still work as before.
+  const addToCart = (product, scannedUnitId = null) => {
     const existingItem = cart.find((i) => i.id === product.id);
     const isNonInv = product.nonInventory;
-    const canIncrease = isNonInv || (existingItem ? existingItem.quantity < product.stock : product.stock > 0);
 
+    if (scannedUnitId) {
+      const unit = (product.qrUnits || []).find((entry) => String(entry.unitId) === String(scannedUnitId));
+      if (!unit || unit.status !== 'available') {
+        alert('This shoe unit is not available in stock.');
+        return;
+      }
+      if (cart.some((item) => (item.unitIds || []).includes(scannedUnitId))) return; // ignore repeated webcam frames
+    }
+
+    const canIncrease = isNonInv || (existingItem ? existingItem.quantity < product.stock : product.stock > 0);
     if (!canIncrease) return alert('Insufficient stock!');
 
     if (existingItem) {
-      setCart(cart.map((i) => (i.id === product.id ? { ...i, quantity: i.quantity + 1 } : i)));
+      setCart((current) => current.map((item) => item.id === product.id
+        ? { ...item, quantity: item.quantity + 1, unitIds: scannedUnitId ? [...(item.unitIds || []), scannedUnitId] : (item.unitIds || []) }
+        : item));
     } else {
-      setCart([...cart, { ...product, quantity: 1, discount: 0, discountType: 'amount' }]);
+      setCart((current) => [...current, {
+        ...product,
+        quantity: 1,
+        unitIds: scannedUnitId ? [scannedUnitId] : [],
+        discount: 0,
+        discountType: 'amount',
+      }]);
     }
+  };
+
+  const handleScanDetected = (code) => {
+    const scanned = String(code || '').trim();
+    if (!scanned) return;
+
+    // Close the scanner preview immediately after the first non-empty scan.
+    // The scanned code is still processed below and the product is added to the cart.
+    setShowScanModal(false);
+
+    // New shoe labels encode a unique unit, e.g. DSH1:SH-ABC123.
+    const qrMatch = scanned.match(/^DSH1:(SH-[A-Z0-9-]+)$/i);
+    if (qrMatch) {
+      const unitId = qrMatch[1].toUpperCase();
+      const product = products.find((entry) => (entry.qrUnits || []).some((unit) => String(unit.unitId).toUpperCase() === unitId));
+      if (!product) {
+        alert(`Shoe QR not found in inventory: ${unitId}`);
+        return;
+      }
+      const unit = (product.qrUnits || []).find((entry) => String(entry.unitId).toUpperCase() === unitId);
+      if (unit?.status !== 'available') {
+        alert(`This shoe unit is already ${unit?.status || 'unavailable'}: ${unitId}`);
+        return;
+      }
+      addToCart(product, unitId);
+      return;
+    }
+
+    // Keep support for existing product barcode values if a QR encodes the old barcode.
+    const val = norm(scanned);
+    const prod = products.find((p) => norm(p.barcode) === val);
+    if (prod) {
+      addToCart(prod);
+      return;
+    }
+    alert(`QR code not recognized: ${scanned}`);
   };
 
   const updateCartQuantity = (id, change) => {
@@ -314,7 +372,7 @@ const POS = () => {
               return item;
             }
           }
-          return { ...item, quantity: newQty };
+          return { ...item, quantity: newQty, unitIds: (item.unitIds || []).slice(0, newQty) };
         })
         .filter(Boolean)
     );
@@ -412,16 +470,40 @@ const POS = () => {
   };
 
   const calculateTotals = () => {
-    const subtotal = cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
+    const round2 = (value) =>
+      Math.round((value + Number.EPSILON) * 100) / 100;
+
+    const subtotal = cart.reduce(
+      (sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0),
+      0
+    );
+
     const totalDiscount = cart.reduce((sum, item) => {
-      const baseTotal = item.price * item.quantity;
+      const baseTotal = Number(item.price || 0) * Number(item.quantity || 0);
       return sum + (baseTotal - calculateItemTotal(item));
     }, 0);
-    const afterDiscount = subtotal - totalDiscount;
+
+    // Assumption: item prices are GST-inclusive. Do not add GST a second time.
+    const afterDiscount = round2(subtotal - totalDiscount);
     const taxRate = Number(shopSettings?.taxRate ?? 0);
-    const tax = afterDiscount * (taxRate / 100);
-    const total = afterDiscount + tax;
-    return { subtotal, totalDiscount, afterDiscount, tax, total, cgst: tax / 2, sgst: tax / 2, taxRate };
+    const tax =
+      taxRate > 0
+        ? round2(afterDiscount * (taxRate / (100 + taxRate)))
+        : 0;
+    const total = afterDiscount;
+    const cgst = round2(tax / 2);
+    const sgst = round2(tax - cgst);
+
+    return {
+      subtotal: round2(subtotal),
+      totalDiscount: round2(totalDiscount),
+      afterDiscount,
+      tax,
+      total,
+      cgst,
+      sgst,
+      taxRate,
+    };
   };
 
   const applyDiscount = () => {
@@ -675,13 +757,44 @@ const POS = () => {
     const overpay = Math.max(0, (amountPaid || 0) - totals.total);
     const change = Math.min(cashPaid, overpay);
 
+    const saleItems = [];
+    for (const item of cart) {
+      if (item.nonInventory) {
+        saleItems.push({ ...item, unitIds: [], finalPrice: calculateItemTotal(item) / item.quantity });
+        continue;
+      }
+      const product = findProductInCatalog(item);
+      if (!product) {
+        alert(`Could not match inventory for ${item.name}. Sale was not completed.`);
+        return;
+      }
+      const availableUnits = (product.qrUnits || []).filter((unit) => unit.status === 'available');
+      const availableIds = new Set(availableUnits.map((unit) => String(unit.unitId)));
+      const selectedIds = [...new Set((item.unitIds || []).map(String))];
+      if (selectedIds.some((unitId) => !availableIds.has(unitId))) {
+        alert(`One or more selected shoe units are no longer available for ${item.name}. Please remove and scan again.`);
+        return;
+      }
+      const needed = Math.max(0, item.quantity - selectedIds.length);
+      const additionalIds = availableUnits
+        .map((unit) => String(unit.unitId))
+        .filter((unitId) => !selectedIds.includes(unitId))
+        .slice(0, needed);
+      if (additionalIds.length < needed) {
+        alert(`Insufficient available shoe units for ${item.name}. Sale was not completed.`);
+        return;
+      }
+      saleItems.push({
+        ...item,
+        unitIds: [...selectedIds, ...additionalIds],
+        finalPrice: calculateItemTotal(item) / item.quantity,
+      });
+    }
+
     const sale = {
       id: `INV${Date.now()}`,
       timestamp: new Date().toISOString(),
-      items: cart.map((item) => ({
-        ...item,
-        finalPrice: calculateItemTotal(item) / item.quantity,
-      })),
+      items: saleItems,
       subtotal: totals.subtotal,
       totalDiscount: totals.totalDiscount,
       afterDiscount: totals.afterDiscount,
@@ -701,7 +814,7 @@ const POS = () => {
     cart.forEach((item) => {
       if (item.nonInventory) return;
       const product = findProductInCatalog(item);
-      if (product) updateStock(product.id, product.stock - item.quantity);
+      if (product) updateStock(product.id, product.stock - item.quantity, { soldUnitIds: item.unitIds || [] });
     });
 
     // Save sale
@@ -765,7 +878,7 @@ const POS = () => {
       id: `RET${Date.now()}`,
       timestamp: new Date().toISOString(),
       originalSaleId: selectedSaleForReturn.id,
-      items: returnItems,
+      items: returnItems.filter((item) => Number(item.returnQuantity) > 0),
       totalRefund,
       reason: returnReason,
       processedBy: user.name,
@@ -779,7 +892,9 @@ const POS = () => {
           const ri = returnItems.find((r) => r.id === sItem.id || r.barcode === sItem.barcode);
           if (!ri) return sItem;
           const remaining = sItem.quantity - ri.returnQuantity;
-          return remaining > 0 ? { ...sItem, quantity: remaining } : null;
+          const returnedIds = (ri.unitIds || []).slice(0, ri.returnQuantity);
+          const remainingUnitIds = (sItem.unitIds || []).filter((unitId) => !returnedIds.includes(unitId));
+          return remaining > 0 ? { ...sItem, quantity: remaining, unitIds: remainingUnitIds } : null;
         })
         .filter(Boolean);
 
@@ -811,8 +926,10 @@ const POS = () => {
 
     // Restock by barcode/id (skip non-inventory items)
     returnItems.forEach((it) => {
+      if (it.nonInventory) return;
       const product = findProductInCatalog(it);
-      if (product) updateStock(product.id, product.stock + it.returnQuantity);
+      const returnedUnitIds = (it.unitIds || []).slice(0, it.returnQuantity);
+      if (product) updateStock(product.id, product.stock + it.returnQuantity, { returnedUnitIds });
     });
 
     updateDrawer(-totalRefund);
@@ -837,13 +954,63 @@ const POS = () => {
 
   const printReturnReceipt = (ret) => {
     const w = window.open('', '_blank', 'width=400,height=600');
+    if (!w) {
+      alert('Please allow pop-ups to print the return receipt.');
+      return;
+    }
+
+    // The sale stores the unique unit IDs assigned at checkout. Reuse those IDs
+    // so the return receipt prints the original shoe QR, never a newly invented unit.
+    const makeQrUrl = (value) =>
+      `https://api.qrserver.com/v1/create-qr-code/?size=180x180&margin=4&data=${encodeURIComponent(value)}`;
+    const escapeHtml = (value) =>
+      String(value ?? '').replace(/[&<>"']/g, (char) => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+      }[char]));
+
+    const returnItemRows = (ret.items || []).filter((it) => Number(it.returnQuantity) > 0).map((it) => {
+      const unitIds = (it.unitIds || []).slice(0, Number(it.returnQuantity) || 0);
+      const qrUnits = unitIds.length
+        ? unitIds.map((unitId) => {
+            // Prefer the exact saved QR payload from InventoryContext.
+            // Its standard format is DSH1:SH-..., so this also remains compatible
+            // with older unit records that do not explicitly store qrValue.
+            const savedUnit = products
+              .flatMap((product) => product.qrUnits || [])
+              .find((unit) => String(unit.unitId) === String(unitId));
+            return {
+              value: savedUnit?.qrValue || `DSH1:${unitId}`,
+              label: String(unitId),
+            };
+          })
+        : (it.barcode
+            ? [{ value: String(it.barcode), label: `Barcode QR: ${it.barcode}` }]
+            : []);
+
+      const qrMarkup = qrUnits.length
+        ? `<div class="returned-qr-list">${qrUnits.map((unit) => `
+            <div class="returned-qr no-break">
+              <img src="${makeQrUrl(unit.value)}" alt="QR ${escapeHtml(unit.label)}" />
+              <div class="qr-label">${escapeHtml(unit.label)}</div>
+            </div>
+          `).join('')}</div>`
+        : `<div class="sub qr-missing">No saved QR/unit code is available for this item.</div>`;
+
+      return `
+        <tr class="no-break">
+          <td class="left sub">${escapeHtml(it.name)}${it.size ? ` (${escapeHtml(it.size)})` : ''}</td>
+          <td class="center sub mono">₹${Number(it.finalPrice || 0).toFixed(2)} × ${Number(it.returnQuantity) || 0}</td>
+        </tr>
+      `;
+    }).join('');
+
     const html = `
       <!doctype html><html><head><meta charset="utf-8" />
       <title>Return Receipt</title>
       <style>
         @page { size: 50mm auto; margin: 0; }
-        @media print { html, body { width: 50mm; } .no-break { page-break-inside: avoid; } }
-        html, body { margin:0; padding:0; width:45mm; font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial, "Noto Sans", sans-serif; font-size:10px; line-height:1.25; }
+        @media print { html, body { width: 50mm; } .no-break { page-break-inside: avoid; break-inside: avoid; } }
+        html, body { margin:0; padding:0; width:45mm; font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial, "Noto Sans", sans-serif; font-size:10px; line-height:1.25; color:#000; }
         .center{text-align:center}.left{text-align:left}.right{text-align:right}.mono{font-variant-numeric:tabular-nums}.bold{font-weight:700}
         .header{font-size:13px;text-transform:uppercase;font-weight:700}
         .sub{font-size:9px}
@@ -851,57 +1018,75 @@ const POS = () => {
         table{border-collapse:collapse;width:100%;table-layout:fixed}
         th,td{padding:1px 0;vertical-align:top}
         th{font-size:9px;font-weight:700;text-transform:uppercase}
-        .col-item{width:48%}.col-qty{width:15%}.col-rate{width:18%}.col-refund{width:19%}
+        .col-item{width:55%}.col-qty{width:45%}
+        .returned-qr-list{display:flex;flex-direction:column;align-items:center;gap:5px;padding:4px 0 7px}
+        .returned-qr{text-align:center;width:100%;border-bottom:1px dotted #999;padding:4px 0}
+        .returned-qr img{width:28mm;height:28mm;object-fit:contain;display:block;margin:0 auto}
+        .qr-label{font-size:8px;overflow-wrap:anywhere;margin-top:2px}
+        .qr-missing{text-align:center;padding:4px 0}
       </style></head><body>
       <div class="center">
-        <div class="header">${shopSettings.name}</div>
-        <div class="sub">${shopSettings.address}</div>
-        <div class="sub">Ph: ${shopSettings.phone}</div>
-        <div class="sub">Email: ${shopSettings.email}</div>
-        ${shopSettings.gstNumber ? `<div class="sub">GSTIN: ${shopSettings.gstNumber}</div>` : ''}
+        <div class="header">${escapeHtml(shopSettings?.name || '')}</div>
+        <div class="sub">${escapeHtml(shopSettings?.address || '')}</div>
+        <div class="sub">Ph: ${escapeHtml(shopSettings?.phone || '')}</div>
+        <div class="sub">Email: ${escapeHtml(shopSettings?.email || '')}</div>
+        ${shopSettings?.gstNumber ? `<div class="sub">GSTIN: ${escapeHtml(shopSettings.gstNumber)}</div>` : ''}
         <div class="rule"></div>
         <div class="bold">RETURN RECEIPT</div>
       </div>
 
       <div class="sub">
-        <div>Return No: ${ret.id}</div>
-        <div>Original Sale: ${ret.originalSaleId}</div>
+        <div>Return No: ${escapeHtml(ret.id)}</div>
+        <div>Original Sale: ${escapeHtml(ret.originalSaleId)}</div>
         <div>Date: ${new Date(ret.timestamp).toLocaleString('en-IN')}</div>
-        <div>Processed by: ${ret.processedBy}</div>
-        <div>Reason: ${ret.reason}</div>
+        <div>Processed by: ${escapeHtml(ret.processedBy)}</div>
+        <div>Reason: ${escapeHtml(ret.reason)}</div>
       </div>
       <div class="rule"></div>
 
       <table>
-        <thead><tr><th class="left col-item">Item</th><th class="center col-qty">RATE✗QTY</th></tr></thead>
-        <tbody>
-          ${ret.items.map(it => `
-            <tr class="no-break">
-              <td class="left sub">${it.name}${it.size ? ` (${it.size})` : ''}</td>
-              <td class="center sub mono">₹${it.finalPrice.toFixed(2)}✗${it.returnQuantity}</td>
-            </tr>
-          `).join('')}
-        </tbody>
-      </table>
-
-      <div class="rule"></div>
-      <table>
-        <tr><td class="left bold">Total Refund:</td><td class="right mono bold">₹${ret.totalRefund.toFixed(2)}</td></tr>
+        <tr><td class="left bold">Total Refund:</td><td class="right mono bold">₹${Number(ret.totalRefund || 0).toFixed(2)}</td></tr>
       </table>
       <div class="rule"></div>
       <div class="center sub">
         <div>Return processed successfully</div>
         <div>Thank you for your understanding</div>
         <div>Designed by Debanjan Pan</div>
+      </div>
+
+      <div class="rule"></div>
+      <table>
+        <thead><tr><th class="left col-item">Returned Shoe</th><th class="center col-qty">RATE × QTY</th></tr></thead>
+        <tbody>${returnItemRows}</tbody>
+      </table>
+      <div class="center sub">
         <h1>卐</h1>
+        ${returnItemRows ? `<div class="returned-qr-list">${(ret.items || []).filter((it) => Number(it.returnQuantity) > 0).map((it) => {
+          const unitIds = (it.unitIds || []).slice(0, Number(it.returnQuantity) || 0);
+          const qrUnits = unitIds.length
+            ? unitIds.map((unitId) => {
+                const savedUnit = products.flatMap((product) => product.qrUnits || []).find((unit) => String(unit.unitId) === String(unitId));
+                return { value: savedUnit?.qrValue || `DSH1:${unitId}`, label: String(unitId), name: it.name };
+              })
+            : (it.barcode ? [{ value: String(it.barcode), label: `Barcode QR: ${it.barcode}`, name: it.name }] : []);
+          return qrUnits.map((unit) => `<div class="returned-qr no-break"><img src="${makeQrUrl(unit.value)}" alt="QR ${escapeHtml(unit.label)}" /><div class="qr-label">${escapeHtml(unit.name)} · ${escapeHtml(unit.label)}</div></div>`).join('');
+        }).join('')}</div>` : ''}
         <h1>ॐ</h1>
       </div>
+      <script>
+        window.addEventListener('load', () => {
+          const images = Array.from(document.images);
+          Promise.all(images.map((img) => img.complete ? Promise.resolve() : new Promise((resolve) => {
+            img.onload = resolve;
+            img.onerror = resolve;
+          }))).then(() => setTimeout(() => window.print(), 250));
+        });
+      </script>
       </body></html>
     `;
     w.document.write(html);
     w.document.close();
     w.focus();
-    setTimeout(() => w.print(), 400);
   };
 
   const selectSaleForReturn = (sale) => {
@@ -1013,35 +1198,47 @@ const POS = () => {
     if (showExpenseModal) refreshTodayExpenses();
   }, [showExpenseModal]);
   return (
-    <div className="space-y-6">
+    <div className="min-h-screen space-y-5 bg-[#0b1120] p-3 text-slate-100 sm:p-5 lg:p-7">
+      <div className="flex flex-col gap-4 rounded-2xl border border-slate-800/80 bg-slate-900/60 px-5 py-5 shadow-sm md:flex-row md:items-center md:justify-between">
+        <div>
+          <p className="mb-1 text-[11px] font-bold uppercase tracking-[0.2em] text-cyan-300">Point of sale</p>
+          <h1 className="text-2xl font-bold tracking-tight text-white sm:text-[30px]">Sales workspace</h1>
+          <p className="mt-1 text-sm text-slate-400">Search inventory, build the basket, and complete checkout from one workspace.</p>
+        </div>
+        <div className="inline-flex items-center gap-2 self-start rounded-full border border-emerald-400/20 bg-emerald-400/10 px-3.5 py-2 text-xs font-semibold text-emerald-200 md:self-auto">
+          <span className="h-2 w-2 rounded-full bg-emerald-400"></span>
+          Register active
+        </div>
+      </div>
+
       {/* Dashboard */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div className="bg-gradient-to-r from-purple-500 to-purple-600 rounded-xl shadow-sm p-4 text-white">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 2xl:grid-cols-3">
+        <div className="min-h-[124px] rounded-2xl border border-violet-400/20 bg-slate-900 p-5 text-white shadow-sm shadow-black/20 transition hover:border-violet-300/40">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-purple-100 text-sm">Drawer Cash (Today)</p>
-              <p className="text-2xl font-bold">₹{drawer.current.toFixed(2)}</p>
-              <p className="text-xs text-purple-100 mt-1">Opening: ₹{drawer.opening.toFixed(2)}</p>
+              <p className="text-sm font-medium text-slate-400">Drawer Cash (Today)</p>
+              <p className="text-3xl font-bold tracking-tight text-white">₹{drawer.current.toFixed(2)}</p>
+              <p className="mt-1 text-xs text-slate-500">Opening: ₹{drawer.opening.toFixed(2)}</p>
             </div>
             <DollarSign className="w-8 h-8 text-purple-200" />
           </div>
         </div>
-        <div className="bg-gradient-to-r from-emerald-500 to-emerald-600 rounded-xl shadow-sm p-4 text-white">
+        <div className="min-h-[124px] rounded-2xl border border-emerald-400/20 bg-slate-900 p-5 text-white shadow-sm shadow-black/20 transition hover:border-emerald-300/40">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-emerald-100 text-sm">Today by Tender</p>
+              <p className="text-sm font-medium text-slate-400">Today by Tender</p>
               <p className="text-sm">Cash: <span className="font-bold">₹{dailyTenders.cash.toFixed(2)}</span></p>
               <p className="text-sm">UPI: <span className="font-bold">₹{dailyTenders.upi.toFixed(2)}</span></p>
             </div>
             <DollarSign className="w-8 h-8 text-emerald-200" />
           </div>
         </div>
-        <div className="bg-gradient-to-r from-slate-500 to-slate-600 rounded-xl shadow-sm p-4 text-white">
+        <div className="min-h-[124px] rounded-2xl border border-slate-700/80 bg-slate-900 p-5 text-white shadow-sm shadow-black/20 transition hover:border-slate-500">
           <div className="flex items-center justify-between">
             <div>
               <p className="text-slate-100 text-sm">Total Due Outstanding</p>
-              <p className="text-2xl font-bold">₹{outstandingDueTotal.toFixed(2)}</p>
-              <p className="text-xs text-slate-100 mt-1">Auto-updates with collections</p>
+              <p className="text-3xl font-bold tracking-tight text-white">₹{outstandingDueTotal.toFixed(2)}</p>
+              <p className="mt-1 text-xs text-slate-500">Auto-updates with collections</p>
             </div>
             <Banknote className="w-8 h-8 text-slate-200" />
           </div>
@@ -1049,42 +1246,48 @@ const POS = () => {
       </div>
 
       {/* Products + Cart */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2 space-y-6">
-          <div className="bg-white rounded-xl shadow-sm p-6">
-            <div className="flex flex-col sm:flex-row gap-4 mb-4">
+      <div className="grid grid-cols-1 items-start gap-6 2xl:grid-cols-[minmax(0,1fr)_390px] 2xl:gap-7">
+        <div className="min-w-0 space-y-5">
+          <div className="rounded-2xl border border-slate-800/90 bg-slate-900/80 p-4 shadow-[0_12px_35px_rgba(0,0,0,0.16)] sm:p-5 lg:p-6">
+            <div className="mb-5 flex flex-col gap-3 2xl:flex-row 2xl:items-center">
               <div className="relative flex-1">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 w-5 h-5" />
+                <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500 w-5 h-5" />
                 <input
                   type="text"
                   placeholder="Search shoes by name, barcode, or brand..."
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
-                  className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                  className="w-full rounded-xl border border-slate-700/80 bg-[#0b1120] py-3.5 pl-11 pr-4 text-sm text-slate-100 placeholder:text-slate-500 outline-none transition focus:border-cyan-400/70 focus:ring-4 focus:ring-cyan-400/10"
                 />
               </div>
-              <div className="flex gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  onClick={() => setShowScanModal(true)}
+                  className="inline-flex items-center gap-2 rounded-xl border border-cyan-300/20 bg-cyan-500 px-4 py-3 text-sm font-semibold text-slate-950 transition hover:bg-cyan-400"
+                >
+                  <Camera className="w-4 h-4" /> Scan
+                </button>
                 <button
                   onClick={() => setShowDirectBill(true)}
-                  className="px-4 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 flex items-center gap-2"
+                  className="inline-flex items-center gap-2 rounded-xl border border-emerald-300/20 bg-emerald-500 px-4 py-3 text-sm font-semibold text-slate-950 transition hover:bg-emerald-400"
                 >
                   <Plus className="w-4 h-4" /> Direct Bill
                 </button>
                 <button
                   onClick={() => setShowReturns(true)}
-                  className="px-4 py-3 bg-orange-600 text-white rounded-lg hover:bg-orange-700 flex items-center gap-2"
+                  className="inline-flex items-center gap-2 rounded-xl border border-orange-300/20 bg-orange-500 px-4 py-3 text-sm font-semibold text-slate-950 transition hover:bg-orange-400"
                 >
                   <RotateCcw className="w-4 h-4" /> Returns
                 </button>
                 <button
                   onClick={() => { loadDues(); setShowDues(true); }}
-                  className="px-4 py-3 bg-gray-700 text-white rounded-lg hover:bg-gray-800 flex items-center gap-2"
+                  className="inline-flex items-center gap-2 rounded-xl border border-slate-700 bg-slate-800/80 px-4 py-3 text-sm font-semibold text-slate-100 transition hover:border-slate-500 hover:bg-slate-700"
                 >
                   <ListChecks className="w-4 h-4" /> Dues
                 </button>
                 <button
                   onClick={() => setShowExpenseModal(true)}
-                  className="px-4 py-3 bg-red-600 text-white rounded-lg hover:bg-red-700 flex items-center gap-2"
+                  className="inline-flex items-center gap-2 rounded-xl border border-rose-300/20 bg-rose-500 px-4 py-3 text-sm font-semibold text-white transition hover:bg-rose-400"
                 >
                   <Minus className="w-4 h-4" /> Expense
                 </button>
@@ -1092,26 +1295,26 @@ const POS = () => {
             </div>
 
             {/* Product Grid */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 max-h-96 overflow-y-auto">
+            <div className="grid max-h-[min(68vh,760px)] grid-cols-1 gap-3 overflow-y-auto pr-1 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-3">
               {filteredProducts.map((product) => (
                 <div
                   key={product.id}
                   onClick={() => addToCart(product)}
-                  className="p-4 border border-gray-200 rounded-lg hover:border-blue-300 hover:shadow-md transition-all cursor-pointer"
+                  className="group rounded-xl border border-slate-800 bg-[#0b1120]/80 p-4 transition-all duration-200 hover:-translate-y-0.5 hover:border-cyan-400/50 hover:bg-slate-800/70 hover:shadow-lg hover:shadow-black/20 cursor-pointer"
                 >
-                  <h3 className="font-medium text-gray-900 mb-1 text-sm">{product.name}</h3>
-                  <p className="text-xs text-gray-600 mb-2">{product.brand} - {product.category}</p>
-                  {product.size && <p className="text-xs text-gray-500 mb-2">Size: {product.size}</p>}
+                  <h3 className="mb-1 text-sm font-semibold text-slate-100">{product.name}</h3>
+                  <p className="text-xs text-slate-400 mb-2">{product.brand} - {product.category}</p>
+                  {product.size && <p className="text-xs text-slate-400 mb-2">Size: {product.size}</p>}
                   {product.purchasePrice !== null && product.purchasePrice !== undefined && product.purchasePrice !== '' && Number(product.purchasePrice) > 0 && (
-                    <p className="text-lg text-green-500 mb-2">Purchase: ₹{Number(product.purchasePrice).toFixed(2)}</p>
+                    <p className="mb-2 text-sm text-emerald-300">Purchase: ₹{Number(product.purchasePrice).toFixed(2)}</p>
                   )}
                   <div className="flex justify-between items-center">
-                    <span className="font-bold text-blue-600">₹{product.price.toFixed(2)}</span>
+                    <span className="font-bold text-lg tracking-tight text-cyan-300">₹{product.price.toFixed(2)}</span>
                     <span
-                      className={`text-xs px-2 py-1 rounded-full ${
-                        product.stock > 2 ? 'bg-green-300' :
-                        product.stock > 0 ? 'bg-yellow-300' : 'bg-red-300'
-                      } text-black`}
+                      className={`text-[11px] px-2.5 py-1 rounded-full ${
+                        product.stock > 2 ? 'bg-emerald-400/10 text-emerald-300 ring-1 ring-emerald-400/20' :
+                        product.stock > 0 ? 'bg-amber-400/10 text-amber-300 ring-1 ring-amber-400/20' : 'bg-rose-400/10 text-rose-300 ring-1 ring-rose-400/20'
+                      } `}
                     >
                       Stock: {product.stock}
                     </span>
@@ -1123,44 +1326,44 @@ const POS = () => {
         </div>
 
         {/* Cart card */}
-        <div className="space-y-6">
-          <div className="bg-white rounded-xl shadow-sm p-6">
-            <div className="flex items-center gap-2 mb-4">
-              <ShoppingCart className="w-5 h-5 text-blue-600" />
-              <h2 className="text-lg font-semibold">Cart ({cart.length})</h2>
+        <div className="min-w-0 2xl:sticky 2xl:top-5">
+          <div className="rounded-2xl border border-slate-700/90 bg-slate-900 p-4 shadow-[0_18px_45px_rgba(0,0,0,0.24)] sm:p-5 lg:p-6">
+            <div className="mb-4 flex items-center gap-2">
+              <ShoppingCart className="h-5 w-5 text-cyan-300" />
+              <h2 className="text-lg font-semibold text-white">Cart ({cart.length})</h2>
             </div>
 
-            <div className="space-y-3 max-h-64 overflow-y-auto mb-4">
+            <div className="mb-5 max-h-[45vh] space-y-3 overflow-y-auto pr-1">
               {cart.map((item) => (
-                <div key={item.id} className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg">
+                <div key={item.id} className="flex items-start gap-3 rounded-xl border border-slate-800 bg-[#0b1120] p-3.5 transition hover:border-slate-600">
                   <div className="flex-1 min-w-0">
-                    <h4 className="font-medium text-sm text-gray-900 truncate">{item.name}</h4>
-                    <p className="text-xs text-gray-600">
+                    <h4 className="font-medium text-sm text-slate-100 truncate">{item.name}</h4>
+                    <p className="text-xs text-slate-400">
                       {item.brand} {item.size && `- Size: ${item.size}`} {item.nonInventory && '• (No Inventory)'}
                     </p>
                     <div className="flex items-center gap-2 mt-1">
                       <span className="text-sm font-medium">₹{item.price.toFixed(2)}</span>
                       {item.discount > 0 && (
-                        <span className="text-xs text-green-600">
+                        <span className="text-xs text-emerald-300">
                           -{item.discountType === 'percentage' ? `${item.discount}%` : `₹${item.discount}`}
                         </span>
                       )}
                     </div>
-                    <p className="text-sm font-bold text-blue-600">Line Total: ₹{calculateItemTotal(item).toFixed(2)}</p>
+                    <p className="text-sm font-bold text-cyan-300">Line Total: ₹{calculateItemTotal(item).toFixed(2)}</p>
                   </div>
 
                   <div className="flex flex-col gap-2">
                     <div className="flex items-center gap-1">
                       <button
                         onClick={() => updateCartQuantity(item.id, -1)}
-                        className="w-6 h-6 bg-red-100 text-red-600 rounded hover:bg-red-200 flex items-center justify-center"
+                        className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-700 bg-slate-800 text-slate-300 transition hover:border-rose-400/40 hover:bg-rose-500/10 hover:text-rose-300"
                       >
                         <Minus className="w-3 h-3" />
                       </button>
                       <span className="w-8 text-center text-sm font-medium">{item.quantity}</span>
                       <button
                         onClick={() => updateCartQuantity(item.id, 1)}
-                        className="w-6 h-6 bg-green-100 text-green-600 rounded hover:bg-green-200 flex items-center justify-center"
+                        className="w-6 h-6 bg-green-100 text-emerald-300 rounded hover:bg-green-200 flex items-center justify-center"
                       >
                         <Plus className="w-3 h-3" />
                       </button>
@@ -1174,14 +1377,14 @@ const POS = () => {
                           setDiscountType(item.discountType);
                           setShowDiscountModal(true);
                         }}
-                        className="w-20 h-10 bg-blue-100 text-blue-600 rounded hover:bg-blue-200 flex items-center justify-center"
+                        className="flex h-9 w-20 items-center justify-center rounded-lg border border-cyan-400/20 bg-cyan-400/10 text-xs font-semibold text-cyan-200 transition hover:bg-cyan-400/20"
                         title="Add Discount"
                       >
                         Discount
                       </button>
                       <button
                         onClick={() => removeFromCart(item.id)}
-                        className="w-10 h-10 bg-red-100 text-red-600 rounded hover:bg-red-200 flex items-center justify-center"
+                        className="flex h-9 w-9 items-center justify-center rounded-lg border border-rose-400/20 bg-rose-400/10 text-rose-300 transition hover:bg-rose-400/20"
                       >
                         <Trash2 className="w-3 h-3" />
                       </button>
@@ -1192,31 +1395,31 @@ const POS = () => {
             </div>
 
             {cart.length === 0 && (
-              <div className="text-center py-8 text-gray-500">
-                <ShoppingCart className="w-12 h-12 mx-auto mb-2 text-gray-300" />
+              <div className="text-center py-8 text-slate-400">
+                <ShoppingCart className="w-12 h-12 mx-auto mb-3 text-slate-600" />
                 <p>Cart is empty</p>
               </div>
             )}
 
             {cart.length > 0 && (
               <>
-                <div className="border-t pt-4 space-y-2">
-                  <div className="flex justify-between text-sm"><span>Subtotal:</span><span>₹{totals.subtotal.toFixed(2)}</span></div>
+                <div className="space-y-2 border-t border-slate-800 pt-4">
+                  <div className="flex justify-between text-sm text-slate-400"><span>Subtotal:</span><span>₹{totals.subtotal.toFixed(2)}</span></div>
                   {totals.totalDiscount > 0 && (
-                    <div className="flex justify-between text-sm text-green-600">
+                    <div className="flex justify-between text-sm text-emerald-300">
                       <span>Total Discount:</span><span>-₹{totals.totalDiscount.toFixed(2)}</span>
                     </div>
                   )}
-                  <div className="flex justify-between text-sm"><span>After Discount:</span><span>₹{totals.afterDiscount.toFixed(2)}</span></div>
-                  <div className="flex justify-between text-xs text-gray-600"><span>CGST ({(totals.taxRate/2).toFixed(2)}%)</span><span>₹{totals.cgst.toFixed(2)}</span></div>
-                  <div className="flex justify-between text-xs text-gray-600"><span>SGST ({(totals.taxRate/2).toFixed(2)}%)</span><span>₹{totals.sgst.toFixed(2)}</span></div>
-                  <div className="flex justify-between text-lg font-bold border-t pt-2"><span>Total:</span><span>₹{totals.total.toFixed(2)}</span></div>
+                  <div className="flex justify-between text-sm text-slate-300"><span>After Discount:</span><span>₹{totals.afterDiscount.toFixed(2)}</span></div>
+                  <div className="flex justify-between text-xs text-slate-400"><span>CGST ({(totals.taxRate/2).toFixed(2)}%)</span><span>₹{totals.cgst.toFixed(2)}</span></div>
+                  <div className="flex justify-between text-xs text-slate-400"><span>SGST ({(totals.taxRate/2).toFixed(2)}%)</span><span>₹{totals.sgst.toFixed(2)}</span></div>
+                  <div className="flex justify-between border-t border-slate-700 pt-3 text-xl font-bold text-white"><span>Total:</span><span>₹{totals.total.toFixed(2)}</span></div>
                 </div>
 
                 <div className="mt-4">
                   <button
                     onClick={() => setShowPayment(true)}
-                    className="w-full bg-blue-600 text-white py-3 px-4 rounded-lg hover:bg-blue-700 flex items-center justify-center gap-2"
+                    className="flex w-full items-center justify-center gap-2 rounded-xl bg-cyan-400 px-4 py-3.5 font-bold text-slate-950 transition hover:bg-cyan-300 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     <CreditCard className="w-4 h-4" /> Proceed to Payment
                   </button>
@@ -1237,58 +1440,58 @@ const POS = () => {
       />
       {/* Direct Bill Modal */}
       {showDirectBill && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-xl shadow-xl w-full max-w-lg">
-            <div className="flex items-center justify-between p-6 border-b">
+        <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/70 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-lg rounded-2xl border border-slate-700 bg-slate-900 shadow-2xl shadow-black/40">
+            <div className="flex items-center justify-between border-b border-slate-800 p-5 sm:p-6">
               <div className="flex items-center gap-3">
-                <div className="p-2 rounded-lg bg-emerald-100 text-emerald-700">
+                <div className="p-2 rounded-lg bg-emerald-400/10 text-emerald-300">
                   <ShoppingCart className="w-5 h-5" />
                 </div>
                 <div>
-                  <h2 className="text-lg font-semibold text-gray-900">Direct Bill Item</h2>
-                  <p className="text-xs text-gray-600">Create on-the-fly item for billing</p>
+                  <h2 className="text-lg font-semibold text-slate-100">Direct Bill Item</h2>
+                  <p className="text-xs text-slate-400">Create on-the-fly item for billing</p>
                 </div>
               </div>
-              <button onClick={() => { resetDirectBillForm(); setShowDirectBill(false); }} className="p-2 hover:bg-gray-100 rounded-lg">
+              <button onClick={() => { resetDirectBillForm(); setShowDirectBill(false); }} className="p-2 hover:bg-slate-800 rounded-lg">
                 <X className="w-5 h-5" />
               </button>
             </div>
 
             <form className="p-6 space-y-4" onSubmit={(e) => e.preventDefault()}>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Product Name *</label>
+                <label className="block text-sm font-medium text-slate-200 mb-1">Product Name *</label>
                 <input
                   type="text"
                   value={directBillForm.name}
                   onChange={(e) => setDirectBillForm({ ...directBillForm, name: e.target.value })}
                   placeholder="e.g., Custom Leather Shoes"
-                  className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-emerald-500"
+                  className="w-full rounded-xl border border-slate-700 bg-[#0b1120] px-3.5 py-2.5 text-sm text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-cyan-400/70 focus:ring-4 focus:ring-cyan-400/10"
                   required
                 />
               </div>
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Brand</label>
+                  <label className="block text-sm font-medium text-slate-200 mb-1">Brand</label>
                   <input
                     list="db_brands"
                     value={directBillForm.brand}
                     onChange={(e) => setDirectBillForm({ ...directBillForm, brand: e.target.value })}
                     placeholder="Brand name"
-                    className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-emerald-500"
+                    className="w-full rounded-xl border border-slate-700 bg-[#0b1120] px-3.5 py-2.5 text-sm text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-cyan-400/70 focus:ring-4 focus:ring-cyan-400/10"
                   />
                   <datalist id="db_brands">
                     {brandOptions.map((b) => <option key={b} value={b} />)}
                   </datalist>
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Size</label>
+                  <label className="block text-sm font-medium text-slate-200 mb-1">Size</label>
                   <input
                     list="db_sizes"
                     value={directBillForm.size}
                     onChange={(e) => setDirectBillForm({ ...directBillForm, size: e.target.value })}
                     placeholder="Size"
-                    className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-emerald-500"
+                    className="w-full rounded-xl border border-slate-700 bg-[#0b1120] px-3.5 py-2.5 text-sm text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-cyan-400/70 focus:ring-4 focus:ring-cyan-400/10"
                   />
                   <datalist id="db_sizes">
                     {sizeOptions.map((s) => <option key={s} value={s} />)}
@@ -1298,26 +1501,26 @@ const POS = () => {
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Category</label>
+                  <label className="block text-sm font-medium text-slate-200 mb-1">Category</label>
                   <input
                     list="db_categories"
                     value={directBillForm.category}
                     onChange={(e) => setDirectBillForm({ ...directBillForm, category: e.target.value })}
                     placeholder="Direct Bill"
-                    className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-emerald-500"
+                    className="w-full rounded-xl border border-slate-700 bg-[#0b1120] px-3.5 py-2.5 text-sm text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-cyan-400/70 focus:ring-4 focus:ring-cyan-400/10"
                   />
                   <datalist id="db_categories">
                     {categoryOptions.map((c) => <option key={c} value={c} />)}
                   </datalist>
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Barcode (Auto)</label>
-                  <div className="flex gap-2">
+                  <label className="block text-sm font-medium text-slate-200 mb-1">Barcode (Auto)</label>
+                  <div className="flex flex-wrap items-center gap-2">
                     <input
                       type="text"
                       value={directBillForm.barcode}
                       readOnly
-                      className="w-full px-3 py-2 border rounded-lg bg-gray-50 font-mono text-sm"
+                      className="w-full rounded-xl border border-slate-700 bg-slate-800/70 px-3.5 py-2.5 font-mono text-sm text-slate-200"
                       placeholder="AUTO: NAME_BRAND"
                     />
                     <button
@@ -1327,12 +1530,12 @@ const POS = () => {
                         const base = makeBaseBarcode(directBillForm.name, directBillForm.brand);
                         setDirectBillForm((prev) => ({ ...prev, barcode: uniqueBarcode(base) }));
                       }}
-                      className="px-3 py-2 border rounded-lg hover:bg-gray-50"
+                      className="px-3 py-2 border rounded-lg text-slate-300 transition hover:bg-slate-800/70"
                     >
                       <RefreshCw className="w-4 h-4" />
                     </button>
                   </div>
-                  <p className="text-[11px] text-gray-500 mt-1">
+                  <p className="text-[11px] text-slate-400 mt-1">
                     Generated as <code className="font-mono">NAME_BRAND</code>. Duplicates get <code className="font-mono">_01</code>, <code className="font-mono">_02</code> …
                   </p>
                 </div>
@@ -1340,22 +1543,22 @@ const POS = () => {
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Price (₹) *</label>
+                  <label className="block text-sm font-medium text-slate-200 mb-1">Price (₹) *</label>
                   <input
                     type="number" step="0.01" min="0"
                     value={directBillForm.price}
                     onChange={(e) => setDirectBillForm({ ...directBillForm, price: e.target.value })}
-                    className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-emerald-500"
+                    className="w-full rounded-xl border border-slate-700 bg-[#0b1120] px-3.5 py-2.5 text-sm text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-cyan-400/70 focus:ring-4 focus:ring-cyan-400/10"
                     required
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Quantity *</label>
+                  <label className="block text-sm font-medium text-slate-200 mb-1">Quantity *</label>
                   <input
                     type="number" min="1"
                     value={directBillForm.quantity}
                     onChange={(e) => setDirectBillForm({ ...directBillForm, quantity: parseInt(e.target.value) || 1 })}
-                    className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-emerald-500"
+                    className="w-full rounded-xl border border-slate-700 bg-[#0b1120] px-3.5 py-2.5 text-sm text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-cyan-400/70 focus:ring-4 focus:ring-cyan-400/10"
                     required
                   />
                 </div>
@@ -1365,7 +1568,7 @@ const POS = () => {
                 <button
                   type="button"
                   onClick={handleDirectBillWithoutInventory}
-                  className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                  className="flex-1 px-4 py-2 rounded-xl bg-cyan-400 px-4 py-2.5 font-semibold text-slate-950 transition hover:bg-cyan-300"
                 >
                   Bill Without Inventory
                 </button>
@@ -1379,7 +1582,7 @@ const POS = () => {
                 <button
                   type="button"
                   onClick={() => { resetDirectBillForm(); setShowDirectBill(false); }}
-                  className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50"
+                  className="flex-1 px-4 py-2 border border-slate-700 text-slate-200 rounded-lg text-slate-300 transition hover:bg-slate-800/70"
                 >
                   Cancel
                 </button>
@@ -1391,34 +1594,34 @@ const POS = () => {
 
       {/* Discount Modal */}
       {showDiscountModal && selectedItemForDiscount && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-xl shadow-xl max-w-md w-full">
-            <div className="flex items-center justify-between p-6 border-b">
+        <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/70 p-4 backdrop-blur-sm">
+          <div className="bg-slate-900 rounded-xl shadow-xl max-w-md w-full">
+            <div className="flex items-center justify-between border-b border-slate-800 p-5 sm:p-6">
               <h2 className="text-xl font-semibold">Add Discount</h2>
-              <button onClick={() => setShowDiscountModal(false)} className="p-2 hover:bg-gray-100 rounded-lg">
+              <button onClick={() => setShowDiscountModal(false)} className="p-2 hover:bg-slate-800 rounded-lg">
                 <X className="w-5 h-5" />
               </button>
             </div>
             <div className="p-6 space-y-4">
               <div>
-                <p className="text-sm text-gray-600 mb-2">Product: {selectedItemForDiscount.name}</p>
-                <p className="text-sm text-gray-600">
+                <p className="text-sm text-slate-400 mb-2">Product: {selectedItemForDiscount.name}</p>
+                <p className="text-sm text-slate-400">
                   Original Price: ₹{selectedItemForDiscount.price.toFixed(2)} × {selectedItemForDiscount.quantity}
                 </p>
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Discount Type</label>
+                <label className="block text-sm font-medium text-slate-200 mb-2">Discount Type</label>
                 <select
                   value={discountType}
                   onChange={(e) => setDiscountType(e.target.value)}
-                  className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
+                  className="w-full rounded-xl border border-slate-700 bg-[#0b1120] px-3 py-2.5 text-slate-100 outline-none focus:border-cyan-400/70 focus:ring-4 focus:ring-cyan-400/10"
                 >
                   <option value="amount">Fixed Amount (₹)</option>
                   <option value="percentage">Percentage (%)</option>
                 </select>
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
+                <label className="block text-sm font-medium text-slate-200 mb-2">
                   Discount Value {discountType === 'percentage' ? '(%)' : '(₹)'}
                 </label>
                 <input
@@ -1430,7 +1633,7 @@ const POS = () => {
                   }
                   value={discountValue}
                   onChange={(e) => setDiscountValue(e.target.value)}
-                  className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
+                  className="w-full rounded-xl border border-slate-700 bg-[#0b1120] px-3 py-2.5 text-slate-100 outline-none focus:border-cyan-400/70 focus:ring-4 focus:ring-cyan-400/10"
                   placeholder={discountType === 'percentage' ? '10' : '100'}
                 />
               </div>
@@ -1453,13 +1656,13 @@ const POS = () => {
               <div className="flex gap-3 pt-2">
                 <button
                   onClick={() => setShowDiscountModal(false)}
-                  className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50"
+                  className="flex-1 px-4 py-2 border border-slate-700 text-slate-200 rounded-lg text-slate-300 transition hover:bg-slate-800/70"
                 >
                   Cancel
                 </button>
                 <button
                   onClick={applyDiscount}
-                  className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                  className="flex-1 px-4 py-2 rounded-xl bg-cyan-400 px-4 py-2.5 font-semibold text-slate-950 transition hover:bg-cyan-300"
                 >
                   Apply Discount
                 </button>
@@ -1470,11 +1673,11 @@ const POS = () => {
       )}
       {/* Returns Modal */}
       {showReturns && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-xl shadow-xl max-w-4xl w-full max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between p-6 border-b">
+        <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/70 p-4 backdrop-blur-sm">
+          <div className="bg-slate-900 rounded-xl shadow-xl max-w-4xl w-full max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between border-b border-slate-800 p-5 sm:p-6">
               <h2 className="text-xl font-semibold">Process Returns</h2>
-              <button onClick={() => { setShowReturns(false); setSelectedSaleForReturn(null); setReturnItems([]); setReturnReason(''); }} className="p-2 hover:bg-gray-100 rounded-lg">
+              <button onClick={() => { setShowReturns(false); setSelectedSaleForReturn(null); setReturnItems([]); setReturnReason(''); }} className="p-2 hover:bg-slate-800 rounded-lg">
                 <X className="w-5 h-5" />
               </button>
             </div>
@@ -1484,12 +1687,12 @@ const POS = () => {
                 <div>
                   <h3 className="text-lg font-medium mb-4">Select Sale to Return</h3>
                   <div className="relative mb-4">
-                    <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                    <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
                     <input
                       value={returnInvoiceSearch}
                       onChange={(e) => setReturnInvoiceSearch(e.target.value)}
                       placeholder="Search by Invoice / Bill No (e.g., INV123...)"
-                      className="w-full pl-9 pr-3 py-2 border rounded-lg"
+                      className="w-full rounded-xl border border-slate-700 bg-[#0b1120] py-2.5 pl-9 pr-3 text-sm text-slate-100 outline-none focus:border-cyan-400/70 focus:ring-4 focus:ring-cyan-400/10"
                     />
                   </div>
                   {(() => {
@@ -1497,25 +1700,25 @@ const POS = () => {
                     const saleSource = q ? allSales.filter(s => String(s.id || '').toLowerCase().includes(q)) : allSales.slice(0, 50);
                     return (
                       <div className="space-y-3 max-h-96 overflow-y-auto">
-                        {saleSource.length === 0 && <div className="text-center text-gray-500 py-6">No invoices found</div>}
+                        {saleSource.length === 0 && <div className="text-center text-slate-400 py-6">No invoices found</div>}
                         {saleSource.map((sale) => (
                           <div
                             key={sale.id}
                             onClick={() => selectSaleForReturn(sale)}
-                            className="p-4 border border-gray-200 rounded-lg hover:bg-red-50 hover:shadow-md transition-all cursor-pointer"
+                            className="rounded-xl border border-slate-800 bg-[#0b1120] p-4 transition-all hover:border-cyan-400/40 hover:bg-slate-800/60 cursor-pointer"
                           >
                             <div className="flex justify-between items-start mb-2">
                               <div>
                                 <p className="font-medium">Sale #{sale.id}</p>
-                                <p className="text-sm text-gray-600">{new Date(sale.timestamp).toLocaleString('en-IN')}</p>
-                                <p className="text-sm text-gray-600">Cashier: {sale.cashier}</p>
+                                <p className="text-sm text-slate-400">{new Date(sale.timestamp).toLocaleString('en-IN')}</p>
+                                <p className="text-sm text-slate-400">Cashier: {sale.cashier}</p>
                               </div>
                               <div className="text-right">
-                                <p className="font-bold text-green-600">₹{sale.total.toFixed(2)}</p>
-                                <p className="text-sm text-gray-600">{sale.items.length} items</p>
+                                <p className="font-bold text-emerald-300">₹{sale.total.toFixed(2)}</p>
+                                <p className="text-sm text-slate-400">{sale.items.length} items</p>
                               </div>
                             </div>
-                            <div className="text-sm text-gray-600">
+                            <div className="text-sm text-slate-400">
                               Items: {sale.items.map((it) => `${it.name} (${it.quantity})`).join(', ')}
                             </div>
                           </div>
@@ -1531,16 +1734,16 @@ const POS = () => {
                       <h3 className="text-lg font-medium">Return Items from Sale #{selectedSaleForReturn.id}</h3>
                       <button onClick={() => { setSelectedSaleForReturn(null); setReturnItems([]); }} className="text-blue-600 hover:text-blue-800">← Back to Sales</button>
                     </div>
-                    <p className="text-sm text-gray-600">Sale Date: {new Date(selectedSaleForReturn.timestamp).toLocaleString('en-IN')}</p>
+                    <p className="text-sm text-slate-400">Sale Date: {new Date(selectedSaleForReturn.timestamp).toLocaleString('en-IN')}</p>
                   </div>
                   <div className="space-y-4 mb-6">
                     {returnItems.map((it) => (
-                      <div key={it.id} className="p-4 border border-gray-200 rounded-lg">
+                      <div key={it.id} className="rounded-xl border border-slate-800 bg-[#0b1120] p-4">
                         <div className="flex justify-between items-start mb-3">
                           <div>
                             <h4 className="font-medium">{it.name}</h4>
-                            <p className="text-sm text-gray-600">{it.brand} {it.size && `- Size: ${it.size}`}</p>
-                            <p className="text-sm text-gray-600">Original: {it.quantity} × ₹{it.finalPrice.toFixed(2)} = ₹{(it.finalPrice * it.quantity).toFixed(2)}</p>
+                            <p className="text-sm text-slate-400">{it.brand} {it.size && `- Size: ${it.size}`}</p>
+                            <p className="text-sm text-slate-400">Original: {it.quantity} × ₹{it.finalPrice.toFixed(2)} = ₹{(it.finalPrice * it.quantity).toFixed(2)}</p>
                           </div>
                           <div className="flex items-center gap-2">
                             <label className="text-sm font-medium">Return Qty:</label>
@@ -1548,23 +1751,23 @@ const POS = () => {
                               type="number" min="0" max={it.maxReturnQuantity}
                               value={it.returnQuantity}
                               onChange={(e) => updateReturnQuantity(it.id, parseInt(e.target.value) || 0)}
-                              className="w-20 px-2 py-1 border rounded focus:ring-2 focus:ring-blue-500"
+                              className="w-20 rounded-lg border border-slate-700 bg-[#0b1120] px-2 py-1 text-slate-100 focus:ring-2 focus:ring-cyan-400/50"
                             />
-                            <span className="text-sm text-gray-500">/ {it.maxReturnQuantity}</span>
+                            <span className="text-sm text-slate-400">/ {it.maxReturnQuantity}</span>
                           </div>
                         </div>
                         {it.returnQuantity > 0 && (
-                          <div className="text-sm text-orange-600 font-medium">Refund: ₹{(it.finalPrice * it.returnQuantity).toFixed(2)}</div>
+                          <div className="text-sm text-orange-300 font-medium">Refund: ₹{(it.finalPrice * it.returnQuantity).toFixed(2)}</div>
                         )}
                       </div>
                     ))}
                   </div>
                   <div className="mb-6">
-                    <label className="block text-sm font-medium text-gray-700 mb-2">Return Reason *</label>
+                    <label className="block text-sm font-medium text-slate-200 mb-2">Return Reason *</label>
                     <select
                       value={returnReason}
                       onChange={(e) => setReturnReason(e.target.value)}
-                      className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
+                      className="w-full rounded-xl border border-slate-700 bg-[#0b1120] px-3 py-2.5 text-slate-100 outline-none focus:border-cyan-400/70 focus:ring-4 focus:ring-cyan-400/10"
                       required
                     >
                       <option value="">Select reason</option>
@@ -1577,25 +1780,25 @@ const POS = () => {
                     </select>
                   </div>
                   {returnItems.some((it) => it.returnQuantity > 0) && (
-                    <div className="bg-orange-50 border border-orange-200 rounded-lg p-4 mb-6">
-                      <h4 className="font-medium text-orange-800 mb-2">Return Summary</h4>
-                      <p className="text-orange-700">
+                    <div className="mb-6 rounded-xl border border-orange-400/20 bg-orange-400/10 p-4">
+                      <h4 className="font-medium text-orange-200 mb-2">Return Summary</h4>
+                      <p className="text-orange-200">
                         Total Refund: ₹{returnItems.reduce((s, it) => s + it.finalPrice * it.returnQuantity, 0).toFixed(2)}
                       </p>
-                      <p className="text-sm text-orange-600 mt-1">Items will be added back to inventory and removed from the original sale.</p>
+                      <p className="text-sm text-orange-300 mt-1">Items will be added back to inventory and removed from the original sale.</p>
                     </div>
                   )}
                   <div className="flex gap-3">
                     <button
                       onClick={() => { setShowReturns(false); setSelectedSaleForReturn(null); setReturnItems([]); setReturnReason(''); }}
-                      className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50"
+                      className="flex-1 px-4 py-2 border border-slate-700 text-slate-200 rounded-lg text-slate-300 transition hover:bg-slate-800/70"
                     >
                       Cancel
                     </button>
                     <button
                       onClick={processReturn}
                       disabled={!returnItems.some((it) => it.returnQuantity > 0) || !returnReason}
-                      className="flex-1 px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 disabled:opacity-50"
+                      className="flex-1 px-4 py-2 rounded-xl bg-orange-500 px-4 py-2.5 font-semibold text-slate-950 transition hover:bg-orange-400 disabled:opacity-50"
                     >
                       <Printer className="w-4 h-4" /> Process Return
                     </button>
@@ -1609,23 +1812,23 @@ const POS = () => {
 
       {/* Dues Modal */}
       {showDues && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-xl shadow-xl max-w-3xl w-full max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between p-6 border-b">
+        <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/70 p-4 backdrop-blur-sm">
+          <div className="max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-2xl border border-slate-700 bg-slate-900 shadow-2xl shadow-black/40">
+            <div className="flex items-center justify-between border-b border-slate-800 p-5 sm:p-6">
               <h2 className="text-xl font-semibold">Unpaid Dues</h2>
-              <button onClick={() => setShowDues(false)} className="p-2 hover:bg-gray-100 rounded-lg">
+              <button onClick={() => setShowDues(false)} className="p-2 hover:bg-slate-800 rounded-lg">
                 <X className="w-5 h-5" />
               </button>
             </div>
 
             <div className="p-6 space-y-3">
               <div className="relative mb-2">
-                <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
                 <input
                   value={dueInvoiceSearch}
                   onChange={(e) => setDueInvoiceSearch(e.target.value)}
                   placeholder="Search by Customer Name"
-                  className="w-full pl-9 pr-3 py-2 border rounded-lg"
+                  className="w-full rounded-xl border border-slate-700 bg-[#0b1120] py-2.5 pl-9 pr-3 text-sm text-slate-100 outline-none focus:border-cyan-400/70 focus:ring-4 focus:ring-cyan-400/10"
                 />
               </div>
 
@@ -1634,16 +1837,16 @@ const POS = () => {
                 const visible = q ? dues.filter(d => String(d.customerName || '').toLowerCase().includes(q)) : dues;
 
                 if (visible.length === 0) {
-                  return <div className="text-center text-gray-500 py-8">No unpaid dues {q ? 'for that customer' : ''} 🎉</div>;
+                  return <div className="text-center text-slate-400 py-8">No unpaid dues {q ? 'for that customer' : ''} 🎉</div>;
                 }
 
                 return visible.map((due) => (
-                  <div key={due.id} className="p-4 border border-gray-200 rounded-lg">
+                  <div key={due.id} className="rounded-xl border border-slate-800 bg-[#0b1120] p-4">
                     <div className="flex justify-between items-start">
                       <div>
-                        <p className="font-semibold text-gray-900">{due.customerName}</p>
-                        <p className="text-sm text-gray-600">Sale: {due.saleId}</p>
-                        <p className="text-xs text-gray-500">Created: {new Date(due.createdAt).toLocaleString('en-IN')}</p>
+                        <p className="font-semibold text-slate-100">{due.customerName}</p>
+                        <p className="text-sm text-slate-400">Sale: {due.saleId}</p>
+                        <p className="text-xs text-slate-400">Created: {new Date(due.createdAt).toLocaleString('en-IN')}</p>
                       </div>
                       <div className="text-right">
                         <p className="text-sm">Total: <span className="font-semibold">₹{due.total.toFixed(2)}</span></p>
@@ -1653,7 +1856,7 @@ const POS = () => {
                     </div>
 
                     {due.payments?.length > 0 && (
-                      <div className="mt-2 text-xs text-gray-600">
+                      <div className="mt-2 text-xs text-slate-400">
                         Collections{' '}
                         {due.payments.map(p =>
                           `₹${p.amount.toFixed(2)} ${p.mode ? `(${p.mode.toUpperCase()})` : ''} on ${new Date(p.timestamp).toLocaleDateString('en-IN')}`
@@ -1663,22 +1866,22 @@ const POS = () => {
 
                     <div className="mt-3 grid grid-cols-1 md:grid-cols-3 gap-3 items-end">
                       <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">Amount to collect (₹)</label>
-                        <p className="text-xs text-gray-700 mt-1">*Max: ₹{due.balance.toFixed(2)}</p>
+                        <label className="block text-sm font-medium text-slate-200 mb-1">Amount to collect (₹)</label>
+                        <p className="text-xs text-slate-200 mt-1">*Max: ₹{due.balance.toFixed(2)}</p>
                         <input
                           type="number" min="0.01" step="0.01" max={due.balance}
                           value={collectionInputs[due.id] ?? ''}
                           onChange={(e) => setCollectionInputs((prev) => ({ ...prev, [due.id]: e.target.value }))}
-                          className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-emerald-500"
+                          className="w-full rounded-xl border border-slate-700 bg-[#0b1120] px-3.5 py-2.5 text-sm text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-cyan-400/70 focus:ring-4 focus:ring-cyan-400/10"
                           placeholder={due.balance.toFixed(2)}
                         />
                       </div>
                       <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">Collection Mode</label>
+                        <label className="block text-sm font-medium text-slate-200 mb-1">Collection Mode</label>
                         <select
                           value={collectionModes[due.id] ?? 'cash'}
                           onChange={(e) => setCollectionModes((prev) => ({ ...prev, [due.id]: e.target.value }))}
-                          className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-emerald-500"
+                          className="w-full rounded-xl border border-slate-700 bg-[#0b1120] px-3.5 py-2.5 text-sm text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-cyan-400/70 focus:ring-4 focus:ring-cyan-400/10"
                         >
                           <option value="cash">Cash</option>
                           <option value="upi">UPI</option>
@@ -1687,13 +1890,13 @@ const POS = () => {
                       <div className="flex gap-3 md:col-span-1">
                         <button
                           onClick={() => { const val = collectionInputs[due.id]; const mode = collectionModes[due.id] ?? 'cash'; collectDue(due, val, mode); }}
-                          className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                          className="px-4 py-2 rounded-xl bg-cyan-400 px-4 py-2.5 font-semibold text-slate-950 transition hover:bg-cyan-300"
                         >
                           Collect
                         </button>
                         <button
                           onClick={() => settleDue(due)}
-                          className="px-4 py-2 bg-gray-100 text-gray-800 rounded-lg hover:bg-gray-200"
+                          className="px-4 py-2 bg-slate-800 text-slate-100 rounded-lg hover:bg-slate-700"
                         >
                           Settle Full
                         </button>
@@ -1709,23 +1912,23 @@ const POS = () => {
 
       {/* Opening Cash Drawer Modal */}
       {showDrawerModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-[60]">
-          <div className="bg-white rounded-xl shadow-xl max-w-sm w-full">
-            <div className="flex items-center justify-between p-6 border-b">
+        <div className="fixed inset-0 z-[60] flex items-center justify-center overflow-y-auto bg-black/70 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-sm rounded-2xl border border-slate-700 bg-slate-900 shadow-2xl shadow-black/40">
+            <div className="flex items-center justify-between border-b border-slate-800 p-5 sm:p-6">
               <h2 className="text-xl font-semibold">Opening Cash (Today)</h2>
-              <button onClick={() => setShowDrawerModal(false)} className="p-2 hover:bg-gray-100 rounded-lg">
+              <button onClick={() => setShowDrawerModal(false)} className="p-2 hover:bg-slate-800 rounded-lg">
                 <X className="w-5 h-5" />
               </button>
             </div>
             <div className="p-6 space-y-4">
-              <p className="text-sm text-gray-600">Please enter the cash amount present in the drawer at start of day.</p>
+              <p className="text-sm text-slate-400">Please enter the cash amount present in the drawer at start of day.</p>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Opening Cash (₹)</label>
+                <label className="block text-sm font-medium text-slate-200 mb-1">Opening Cash (₹)</label>
                 <input
                   type="number" min="0" step="0.01"
                   value={openingCashInput}
                   onChange={(e) => setOpeningCashInput(e.target.value)}
-                  className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-purple-500"
+                  className="w-full rounded-xl border border-slate-700 bg-[#0b1120] px-3.5 py-2.5 text-sm text-slate-100 outline-none focus:border-cyan-400/70 focus:ring-4 focus:ring-cyan-400/10"
                   placeholder="e.g., 2000"
                   autoFocus
                 />
@@ -1733,13 +1936,13 @@ const POS = () => {
               <div className="flex gap-3 pt-2">
                 <button
                   onClick={() => { setOpeningCashInput('0'); submitOpeningCash(); }}
-                  className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50"
+                  className="flex-1 px-4 py-2 border border-slate-700 text-slate-200 rounded-lg text-slate-300 transition hover:bg-slate-800/70"
                 >
                   Start with ₹0
                 </button>
                 <button
                   onClick={submitOpeningCash}
-                  className="flex-1 px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700"
+                  className="flex-1 px-4 py-2 rounded-xl bg-cyan-400 px-4 py-2.5 font-semibold text-slate-950 transition hover:bg-cyan-300"
                 >
                   Save
                 </button>
@@ -1751,52 +1954,52 @@ const POS = () => {
 
       {/* Expense Modal */}
       {showExpenseModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-[60]">
-          <div className="bg-white rounded-xl shadow-xl max-w-sm w-full">
-            <div className="flex items-center justify-between p-6 border-b">
+        <div className="fixed inset-0 z-[60] flex items-center justify-center overflow-y-auto bg-black/70 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-sm rounded-2xl border border-slate-700 bg-slate-900 shadow-2xl shadow-black/40">
+            <div className="flex items-center justify-between border-b border-slate-800 p-5 sm:p-6">
               <h2 className="text-xl font-semibold">Record Expense (Cash)</h2>
-              <button onClick={() => setShowExpenseModal(false)} className="p-2 hover:bg-gray-100 rounded-lg">
+              <button onClick={() => setShowExpenseModal(false)} className="p-2 hover:bg-slate-800 rounded-lg">
                 <X className="w-5 h-5" />
               </button>
             </div>
             <div className="p-6 space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Amount (₹)</label>
+                <label className="block text-sm font-medium text-slate-200 mb-1">Amount (₹)</label>
                 <input
                   type="number" min="0.01" step="0.01"
                   value={expenseAmount}
                   onChange={(e) => setExpenseAmount(e.target.value)}
-                  className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-red-500"
+                  className="w-full rounded-xl border border-slate-700 bg-[#0b1120] px-3.5 py-2.5 text-sm text-slate-100 outline-none focus:border-cyan-400/70 focus:ring-4 focus:ring-cyan-400/10"
                   placeholder="e.g., 250.00"
                   autoFocus
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Reason</label>
+                <label className="block text-sm font-medium text-slate-200 mb-1">Reason</label>
                 <input
                   type="text"
                   value={expenseReason}
                   onChange={(e) => setExpenseReason(e.target.value)}
-                  className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-red-500"
+                  className="w-full rounded-xl border border-slate-700 bg-[#0b1120] px-3.5 py-2.5 text-sm text-slate-100 outline-none focus:border-cyan-400/70 focus:ring-4 focus:ring-cyan-400/10"
                   placeholder="e.g., Packing material"
                 />
               </div>
               <div className="mt-4 border-t pt-3">
                 <div className="flex justify-between items-center mb-2">
-                  <h3 className="text-sm font-semibold text-gray-900">Today's Expenses</h3>
+                  <h3 className="text-sm font-semibold text-slate-100">Today's Expenses</h3>
                   <span className="text-sm font-medium">₹{todaysExpenseTotal.toFixed(2)}</span>
                 </div>
                 {todaysExpenses.length === 0 ? (
-                  <div className="text-sm text-gray-500">No expenses recorded today</div>
+                  <div className="text-sm text-slate-400">No expenses recorded today</div>
                 ) : (
                   <div className="max-h-40 overflow-y-auto divide-y">
                     {todaysExpenses.map((ex) => (
                       <div key={ex.id} className="py-2 text-sm flex justify-between items-start">
                         <div className="min-w-0">
-                          <div className="font-medium text-gray-900 truncate">₹{Number(ex.amount).toFixed(2)}</div>
-                          <div className="text-gray-600 truncate">{ex.reason || '-'}</div>
+                          <div className="font-medium text-slate-100 truncate">₹{Number(ex.amount).toFixed(2)}</div>
+                          <div className="text-slate-400 truncate">{ex.reason || '-'}</div>
                         </div>
-                        <div className="text-right text-xs text-gray-500">
+                        <div className="text-right text-xs text-slate-400">
                           <div>{new Date(ex.timestamp).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}</div>
                           <div>{ex.cashier || ''}</div>
                         </div>
@@ -1808,13 +2011,13 @@ const POS = () => {
               <div className="flex gap-3 pt-2">
                 <button
                   onClick={() => setShowExpenseModal(false)}
-                  className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50"
+                  className="flex-1 px-4 py-2 border border-slate-700 text-slate-200 rounded-lg text-slate-300 transition hover:bg-slate-800/70"
                 >
                   Cancel
                 </button>
                 <button
                   onClick={submitExpense}
-                  className="flex-1 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700"
+                  className="flex-1 px-4 py-2 rounded-xl bg-rose-500 px-4 py-2.5 font-semibold text-white transition hover:bg-rose-400"
                 >
                   Save Expense
                 </button>
@@ -1823,6 +2026,13 @@ const POS = () => {
           </div>
         </div>
       )}
+
+      {/* Barcode Scanner (POS) */}
+      <QrWebcamScanner
+        open={showScanModal}
+        onClose={() => setShowScanModal(false)}
+        onDetected={handleScanDetected}
+      />
 
     </div>
   );
