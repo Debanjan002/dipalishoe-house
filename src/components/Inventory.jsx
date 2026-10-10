@@ -999,7 +999,7 @@ const Inventory = () => {
 
     };
 
-    const required = ['name', 'category', 'price', 'stock'];
+    const required = ['name', 'price', 'stock'];
 
     const missingReq = required.filter(k => idx[k] === -1);
 
