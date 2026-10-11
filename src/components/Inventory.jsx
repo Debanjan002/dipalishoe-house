@@ -215,6 +215,7 @@ const Inventory = () => {
   const [existingQrProductId, setExistingQrProductId] = useState('');
   const [existingQrInput, setExistingQrInput] = useState('');
   const [existingQrValues, setExistingQrValues] = useState([]);
+  const [existingQrQuantities, setExistingQrQuantities] = useState({});
   const [existingQrMessage, setExistingQrMessage] = useState(null);
 
 
@@ -601,8 +602,23 @@ const Inventory = () => {
     const value = String(rawValue ?? '').trim();
     if (!value) return;
     setExistingQrValues((current) => current.includes(value) ? current : [...current, value]);
+    setExistingQrQuantities((current) => ({ ...current, [value]: Math.max(1, Number(current[value]) || 1) }));
     setExistingQrInput('');
     setExistingQrMessage(null);
+  };
+
+  // Keep the scanner preview quantities synchronized with the inventory registration queue.
+  const syncScannedQrQuantities = (items) => {
+    if (!Array.isArray(items)) return;
+    setExistingQrValues((current) => [...new Set([...current, ...items.map((item) => String(item?.value ?? '').trim()).filter(Boolean)])]);
+    setExistingQrQuantities((current) => {
+      const next = { ...current };
+      items.forEach((item) => {
+        const value = String(item?.value ?? '').trim();
+        if (value) next[value] = Math.max(1, Number.parseInt(item.quantity, 10) || 1);
+      });
+      return next;
+    });
   };
 
   const handleRegisterExistingQrs = () => {
@@ -617,7 +633,8 @@ const Inventory = () => {
       setExistingQrMessage({ type: 'error', text: 'Scan or enter at least one existing QR value.' });
       return;
     }
-    const result = registerExistingQrUnits(existingQrProductId, values);
+    const registrations = values.map((value) => ({ value, quantity: Math.max(1, Number.parseInt(existingQrQuantities[value], 10) || 1) }));
+    const result = registerExistingQrUnits(existingQrProductId, registrations);
     if (!result.success) {
       const detail = result.duplicates?.length ? ` Duplicate values: ${result.duplicates.join(', ')}` : '';
       setExistingQrMessage({ type: 'error', text: `${result.error || 'QR registration failed.'}${detail}` });
@@ -629,6 +646,7 @@ const Inventory = () => {
       text: `${result.added} QR code(s) registered and stock updated.${skipped ? ` ${skipped} duplicate QR code(s) skipped.` : ''}`,
     });
     setExistingQrValues([]);
+    setExistingQrQuantities({});
     setExistingQrInput('');
   };
 
@@ -655,6 +673,7 @@ const Inventory = () => {
         return;
       }
       const uniqueValues = [...new Set(qrValues)];
+      const registrations = uniqueValues.map((value) => ({ value, quantity: Math.max(1, Number.parseInt(existingQrQuantities[value], 10) || 1) }));
       const desired = formData.barcode || makeBaseBarcode(formData.name, formData.brand);
       const productData = {
         ...formData,
@@ -670,7 +689,7 @@ const Inventory = () => {
         setExistingQrMessage({ type: 'error', text: 'Product could not be created. Please try again.' });
         return;
       }
-      const result = registerExistingQrUnits(addedProduct.id, uniqueValues);
+      const result = registerExistingQrUnits(addedProduct.id, registrations);
       if (!result.success) {
         setExistingQrMessage({ type: 'error', text: `${result.error || 'QR registration failed.'} The product was created with zero stock; correct the QR values and try registering them again.` });
         return;
@@ -680,6 +699,7 @@ const Inventory = () => {
       setShowAddModal(false);
       setShowQrScannerInForm(false);
       setExistingQrValues([]);
+      setExistingQrQuantities({});
       setExistingQrInput('');
       resetForm();
       setFormMode('product');
@@ -2188,8 +2208,7 @@ const Inventory = () => {
 
                     <label className="block text-sm font-medium text-slate-200 mb-2">
 
-                      Category *
-
+                      Category{formMode === 'existingQr' && !editingProduct ? ' (optional)' : ' *'}
                     </label>
 
                     <select
@@ -2200,7 +2219,7 @@ const Inventory = () => {
 
                       className="w-full px-3 py-3 border border-slate-700 bg-slate-800 text-slate-100 placeholder:text-slate-500 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-t border-slate-800ransparent"
 
-                      required
+                      required={!(formMode === 'existingQr' && !editingProduct)}
 
                     >
 
@@ -2360,27 +2379,26 @@ const Inventory = () => {
 
                     <label className="block text-sm font-medium text-slate-200 mb-2">
 
-                      Current Stock *
-
+                      {formMode === 'existingQr' && !editingProduct ? 'Stock (based on QR count)' : 'Current Stock *'}
                     </label>
-
                     <input
-
                       type="number"
-
                       min="0"
-
-                      value={formData.stock}
-
+                      value={formMode === 'existingQr' && !editingProduct
+                        ? [...new Set([...existingQrValues, ...(String(existingQrInput || '').trim() ? [String(existingQrInput).trim()] : [])])].reduce(
+                            (total, qrValue) => total + Math.max(1, Number.parseInt(existingQrQuantities[qrValue], 10) || 1),
+                            0
+                          )
+                        : formData.stock}
                       onChange={(e) => setFormData({ ...formData, stock: e.target.value })}
-
-                      className="w-full px-3 py-3 border border-slate-700 bg-slate-800 text-slate-100 placeholder:text-slate-500 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-t border-slate-800ransparent"
-
+                      readOnly={formMode === 'existingQr' && !editingProduct}
+                      className={`w-full px-3 py-3 border border-slate-700 bg-slate-800 text-slate-100 placeholder:text-slate-500 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-t border-slate-800ransparent ${formMode === 'existingQr' && !editingProduct ? 'cursor-not-allowed opacity-80' : ''}`}
                       placeholder="50"
-
-                      required
-
+                      required={!(formMode === 'existingQr' && !editingProduct)}
                     />
+                    {formMode === 'existingQr' && !editingProduct && (
+                      <p className="mt-1 text-xs text-violet-300">Stock updates automatically from the total quantities assigned to the scanned QR values.</p>
+                    )}
 
                   </div>
 
@@ -2635,17 +2653,28 @@ const Inventory = () => {
               </div>
             </div>
           </div>
-          <QrWebcamScanner open={showExistingQrScanner} onClose={() => setShowExistingQrScanner(false)} onDetected={(value) => { setShowExistingQrScanner(false); queueExistingQrValue(value); }} />
+          <QrWebcamScanner
+            open={showExistingQrScanner}
+            onClose={() => setShowExistingQrScanner(false)}
+            onDetected={queueExistingQrValue}
+            onQuantitiesChange={syncScannedQrQuantities}
+            isAlreadyRegistered={(value) => (products || []).some((product) =>
+              (product.qrUnits || []).some((unit) => String(unit.qrValue || '').trim() === value)
+            )}
+            continuous
+          />
         </div>
       )}
 
       <QrWebcamScanner
         open={showQrScannerInForm}
         onClose={() => setShowQrScannerInForm(false)}
-        onDetected={(value) => {
-          setShowQrScannerInForm(false);
-          queueExistingQrValue(value);
-        }}
+        onDetected={queueExistingQrValue}
+        onQuantitiesChange={syncScannedQrQuantities}
+        isAlreadyRegistered={(value) => (products || []).some((product) =>
+          (product.qrUnits || []).some((unit) => String(unit.qrValue || '').trim() === value)
+        )}
+        continuous
       />
 
       {/* Barcode Scanner Modal */}

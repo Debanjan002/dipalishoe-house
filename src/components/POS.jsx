@@ -332,16 +332,22 @@ const POS = () => {
 
     // 1) Match the exact stored QR payload first. This supports pre-existing QR labels
     // regardless of whether their content is DSH1, a URL, or another legacy value.
-    const exactMatch = products.map((product) => ({
-      product,
-      unit: (product.qrUnits || []).find((entry) => String(entry.qrValue ?? '') === scanned),
-    })).find((match) => match.unit);
-    if (exactMatch) {
-      if (exactMatch.unit.status !== 'available') {
-        alert(`This shoe unit is already ${exactMatch.unit.status || 'unavailable'}: ${exactMatch.unit.unitId}`);
+    // A QR payload may be shared by multiple physical boxes. Each box has its own
+    // unitId, so select one AVAILABLE unit for this scan rather than treating the
+    // shared QR payload itself as a unique unit identifier.
+    const exactMatches = products.flatMap((product) =>
+      (product.qrUnits || [])
+        .filter((entry) => String(entry.qrValue ?? '') === scanned)
+        .map((unit) => ({ product, unit }))
+    );
+    if (exactMatches.length) {
+      const availableMatch = exactMatches.find(({ unit }) => unit.status === 'available');
+      if (!availableMatch) {
+        const statuses = [...new Set(exactMatches.map(({ unit }) => unit.status || 'unavailable'))];
+        alert(`No available shoe units remain for this QR. Status: ${statuses.join(', ')}.`);
         return;
       }
-      addToCart(exactMatch.product, String(exactMatch.unit.unitId));
+      addToCart(availableMatch.product, String(availableMatch.unit.unitId));
       return;
     }
 

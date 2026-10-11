@@ -163,31 +163,65 @@ export const InventoryProvider = ({ children }) => {
     commitProducts((current) => current.filter((product) => String(product.id) !== String(id)));
   };
 
-  /** Register scanned/pre-existing QR payloads without changing their payload values. */
+  /**
+   * Register existing QR payloads without changing their payload values.
+   * Each QR value may represent multiple physical boxes; every box receives a
+   * unique internal unitId while sharing the scanned qrValue.
+   * Accepts strings for legacy callers or { value, quantity } records.
+   */
   const registerExistingQrUnits = (productId, qrValues) => {
     const product = productsRef.current.find((entry) => String(entry.id) === String(productId));
     if (!product) return { success: false, added: 0, duplicates: [], error: 'Please select a valid product.' };
 
-    const values = (Array.isArray(qrValues) ? qrValues : [qrValues])
-      .map((value) => String(value ?? '').trim())
-      .filter(Boolean);
-    if (!values.length) return { success: false, added: 0, duplicates: [], error: 'Scan or enter at least one QR code.' };
-
-    const allUnits = productsRef.current.flatMap((entry) => entry.qrUnits || []);
-    const existingValues = new Set(allUnits.map((unit) => String(unit.qrValue ?? '')));
-    const seenInBatch = new Set();
-    const accepted = [];
-    const duplicates = [];
-    values.forEach((value) => {
-      if (existingValues.has(value) || seenInBatch.has(value)) duplicates.push(value);
-      else { accepted.push(value); seenInBatch.add(value); }
+    const inputItems = Array.isArray(qrValues) ? qrValues : [qrValues];
+    const quantitiesByValue = new Map();
+    inputItems.forEach((item) => {
+      const value = String(item && typeof item === 'object' ? item.value ?? '' : item ?? '').trim();
+      if (!value) return;
+      const quantity = item && typeof item === 'object'
+        ? Math.max(1, safeNumber(item.quantity) || 1)
+        : 1;
+      quantitiesByValue.set(value, (quantitiesByValue.get(value) || 0) + quantity);
     });
-    if (!accepted.length) {
-      return { success: false, added: 0, duplicates, error: 'These QR values are already registered. No stock was changed.' };
+    if (!quantitiesByValue.size) {
+      return { success: false, added: 0, duplicates: [], error: 'Scan or enter at least one QR code.' };
+    }
+
+    const allUnits = productsRef.current.flatMap((entry) => (entry.qrUnits || []).map((unit) => ({ ...unit, ownerProductId: String(entry.id) })));
+    const registeredOwners = new Map();
+    allUnits.forEach((unit) => {
+      const value = String(unit.qrValue ?? '').trim();
+      if (!value) return;
+      if (!registeredOwners.has(value)) registeredOwners.set(value, new Set());
+      registeredOwners.get(value).add(String(unit.ownerProductId));
+    });
+
+    const conflicts = [];
+    for (const value of quantitiesByValue.keys()) {
+      const owners = registeredOwners.get(value);
+      if (owners && [...owners].some((ownerId) => ownerId !== String(productId))) conflicts.push(value);
+    }
+    if (conflicts.length) {
+      return {
+        success: false,
+        added: 0,
+        duplicates: conflicts,
+        error: 'One or more QR values are already assigned to a different product. No stock was changed.',
+      };
     }
 
     const now = new Date().toISOString();
-    const newUnits = accepted.map((value) => ({ ...createUnit(product.id, 'available', value), registeredAt: now, qrSource: 'existing' }));
+    const newUnits = [];
+    quantitiesByValue.forEach((quantity, value) => {
+      for (let index = 0; index < quantity; index += 1) {
+        newUnits.push({
+          ...createUnit(product.id, 'available', value),
+          registeredAt: now,
+          qrSource: 'existing',
+        });
+      }
+    });
+
     commitProducts((current) => current.map((entry) => {
       if (String(entry.id) !== String(productId)) return entry;
       const currentUnits = Array.isArray(entry.qrUnits) ? entry.qrUnits : [];
@@ -197,7 +231,7 @@ export const InventoryProvider = ({ children }) => {
         qrUnits: [...currentUnits, ...newUnits],
       };
     }));
-    return { success: true, added: newUnits.length, duplicates, units: newUnits };
+    return { success: true, added: newUnits.length, duplicates: [], units: newUnits };
   };
 
   // soldUnitIds/returnedUnitIds allow POS checkout and returns to preserve each physical unit's identity.
