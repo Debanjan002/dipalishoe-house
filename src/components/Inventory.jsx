@@ -3,8 +3,9 @@ import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { useInventory } from '../contexts/InventoryContext';
 
 import BarcodeScanner from './BarcodeScanner';
-
+import QrWebcamScanner from './QrWebcamScanner';
 import QrLabelPrint from './QrLabelPrint';
+
 
 import {
 
@@ -44,7 +45,8 @@ import {
 
   Upload,
 
-  QrCode
+  QrCode,
+  Printer
 
 } from 'lucide-react';
 
@@ -194,7 +196,8 @@ const Inventory = () => {
 
     deleteProduct,
 
-    getLowStockProducts
+    getLowStockProducts,
+    registerExistingQrUnits
 
   } = useInventory();
 
@@ -205,9 +208,21 @@ const Inventory = () => {
   const [showAddModal, setShowAddModal] = useState(false);
 
   const [showScanner, setShowScanner] = useState(false);
+  const [showExistingQrModal, setShowExistingQrModal] = useState(false);
+  const [showExistingQrScanner, setShowExistingQrScanner] = useState(false);
+  const [showQrScannerInForm, setShowQrScannerInForm] = useState(false);
+  const [formMode, setFormMode] = useState('product'); // product | existingQr
+  const [existingQrProductId, setExistingQrProductId] = useState('');
+  const [existingQrInput, setExistingQrInput] = useState('');
+  const [existingQrValues, setExistingQrValues] = useState([]);
+  const [existingQrMessage, setExistingQrMessage] = useState(null);
 
-  const [qrPrintProduct, setQrPrintProduct] = useState(null);
+
   const [lastAddedProduct, setLastAddedProduct] = useState(null);
+  const [qrPrintProduct, setQrPrintProduct] = useState(null);
+  const [qrSelectProduct, setQrSelectProduct] = useState(null);
+  const [selectedQrUnitIds, setSelectedQrUnitIds] = useState([]);
+
   const [showAddedProductPopup, setShowAddedProductPopup] = useState(false);
 
   const [scannerAutoPhoto, setScannerAutoPhoto] = useState(false);
@@ -582,6 +597,41 @@ const Inventory = () => {
 
   };
 
+  const queueExistingQrValue = (rawValue) => {
+    const value = String(rawValue ?? '').trim();
+    if (!value) return;
+    setExistingQrValues((current) => current.includes(value) ? current : [...current, value]);
+    setExistingQrInput('');
+    setExistingQrMessage(null);
+  };
+
+  const handleRegisterExistingQrs = () => {
+    const values = [...existingQrValues];
+    const typedValue = String(existingQrInput || '').trim();
+    if (typedValue && !values.includes(typedValue)) values.push(typedValue);
+    if (!existingQrProductId) {
+      setExistingQrMessage({ type: 'error', text: 'Please select the shoe product first.' });
+      return;
+    }
+    if (!values.length) {
+      setExistingQrMessage({ type: 'error', text: 'Scan or enter at least one existing QR value.' });
+      return;
+    }
+    const result = registerExistingQrUnits(existingQrProductId, values);
+    if (!result.success) {
+      const detail = result.duplicates?.length ? ` Duplicate values: ${result.duplicates.join(', ')}` : '';
+      setExistingQrMessage({ type: 'error', text: `${result.error || 'QR registration failed.'}${detail}` });
+      return;
+    }
+    const skipped = result.duplicates?.length || 0;
+    setExistingQrMessage({
+      type: 'success',
+      text: `${result.added} QR code(s) registered and stock updated.${skipped ? ` ${skipped} duplicate QR code(s) skipped.` : ''}`,
+    });
+    setExistingQrValues([]);
+    setExistingQrInput('');
+  };
+
   const handleSubmit = (e) => {
 
     e.preventDefault();
@@ -594,6 +644,46 @@ const Inventory = () => {
 
       calculatedMargin = margin.toFixed(2);
 
+    }
+
+    if (formMode === 'existingQr' && !editingProduct) {
+      const qrValues = [...existingQrValues];
+      const typedQr = String(existingQrInput || '').trim();
+      if (typedQr && !qrValues.includes(typedQr)) qrValues.push(typedQr);
+      if (!qrValues.length) {
+        setExistingQrMessage({ type: 'error', text: 'Scan or enter at least one existing QR value before adding this product.' });
+        return;
+      }
+      const uniqueValues = [...new Set(qrValues)];
+      const desired = formData.barcode || makeBaseBarcode(formData.name, formData.brand);
+      const productData = {
+        ...formData,
+        barcode: desired ? dedupeBarcode(desired) : desired,
+        price: parseFloat(formData.price),
+        stock: 0,
+        minStock: parseInt(formData.minStock) || lowStockThreshold,
+        purchasePrice: formData.purchasePrice ? parseFloat(formData.purchasePrice) : null,
+        margin: calculatedMargin || formData.margin,
+      };
+      const addedProduct = addProduct(productData);
+      if (!addedProduct?.id) {
+        setExistingQrMessage({ type: 'error', text: 'Product could not be created. Please try again.' });
+        return;
+      }
+      const result = registerExistingQrUnits(addedProduct.id, uniqueValues);
+      if (!result.success) {
+        setExistingQrMessage({ type: 'error', text: `${result.error || 'QR registration failed.'} The product was created with zero stock; correct the QR values and try registering them again.` });
+        return;
+      }
+      setLastAddedProduct({ ...addedProduct, stock: result.added });
+      setShowAddedProductPopup(true);
+      setShowAddModal(false);
+      setShowQrScannerInForm(false);
+      setExistingQrValues([]);
+      setExistingQrInput('');
+      resetForm();
+      setFormMode('product');
+      return;
     }
 
     const productData = {
@@ -631,12 +721,40 @@ const Inventory = () => {
       const addedProduct = addProduct(productData);
 
       setLastAddedProduct(addedProduct || null);
+
       setShowAddedProductPopup(Boolean(addedProduct));
 
       resetForm(); // keep add modal open for quick add
 
     }
 
+  };
+
+  const openQrSelection = (product) => {
+    const units = Array.isArray(product.qrUnits) ? product.qrUnits : [];
+    setQrSelectProduct(product);
+    // Preselect available units; the user can select any saved unit QR to reprint.
+    setSelectedQrUnitIds(units.filter((unit) => unit.qrValue).map((unit) => String(unit.unitId)));
+  };
+
+  const printSelectedQrUnits = () => {
+    if (!qrSelectProduct) return;
+    const selectedUnits = (qrSelectProduct.qrUnits || []).filter((unit) =>
+      selectedQrUnitIds.includes(String(unit.unitId)) && unit.qrValue
+    );
+    if (!selectedUnits.length) {
+      alert('Select at least one QR code to print.');
+      return;
+    }
+    // Pass only the selected units to the existing label printer. Preserve the exact
+    // saved QR payloads; temporarily mark them available for the printer's filtering.
+    setQrPrintProduct({
+      ...qrSelectProduct,
+      stock: selectedUnits.length,
+      qrUnits: selectedUnits.map((unit) => ({ ...unit, status: 'available' })),
+    });
+    setQrSelectProduct(null);
+    setSelectedQrUnitIds([]);
   };
 
   const handleEdit = (product) => {
@@ -711,6 +829,17 @@ const Inventory = () => {
 
     setShowAddModal(true);
 
+  };
+
+  const openAddUsingQrForm = () => {
+    setFormMode('existingQr');
+    setExistingQrValues([]);
+    setExistingQrInput('');
+    setExistingQrMessage(null);
+    resetForm();
+    setEditingProduct(null);
+    setBarcodeAuto(true);
+    setShowAddModal(true);
   };
 
   const closeModal = () => {
@@ -1291,6 +1420,22 @@ const Inventory = () => {
 
         </div>
 
+        <div className="mb-6 flex flex-col gap-3 rounded-xl border border-violet-500/40 bg-violet-950/20 p-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="min-w-0">
+            <h2 className="font-semibold text-slate-100">Register existing shoe QR labels</h2>
+            <p className="mt-1 text-sm text-slate-400">Use the same camera scanner as POS. Existing QR values are kept unchanged and added to stock.</p>
+          </div>
+          <button
+            type="button"
+            onClick={openAddUsingQrForm}
+            className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl bg-violet-600 px-5 py-3 font-semibold text-white shadow-lg shadow-violet-950/30 transition-colors hover:bg-violet-500 focus:outline-none focus:ring-2 focus:ring-violet-300"
+            title="Add using existing QR labels"
+          >
+            <QrCode className="h-5 w-5" />
+            Add Using QR
+          </button>
+        </div>
+
         {/* Search and Filter Controls */}
 
         <div className="space-y-4">
@@ -1649,22 +1794,6 @@ const Inventory = () => {
 
                 <button
 
-                  onClick={() => setQrPrintProduct(product)}
-
-                  className="p-1.5 sm:p-2 shrink-0 text-cyan-300 hover:bg-cyan-950/40 border border-slate-800 rounded-xl transition-colors"
-
-                  title="Print QR labels for available stock"
-
-                  aria-label={`Print QR labels for ${product.name}`}
-
-                >
-
-                  <QrCode className="w-4 h-4" />
-
-                </button>
-
-                <button
-
                   onClick={() => duplicateProduct(product)}
 
                   className="p-1.5 sm:p-2 shrink-0 text-slate-300 hover:bg-slate-950/60 border border-slate-800 rounded-xl transition-colors"
@@ -1775,6 +1904,19 @@ const Inventory = () => {
 
             </div>
 
+            <div className="mt-4 border-t border-slate-800 pt-4">
+              <button
+                type="button"
+                onClick={() => openQrSelection(product)}
+                disabled={!(product.qrUnits || []).some((unit) => unit.qrValue)}
+                className="flex w-full items-center justify-center gap-2 rounded-xl border border-cyan-700/70 bg-cyan-950/40 px-3 py-2.5 text-sm font-semibold text-cyan-200 transition-colors hover:bg-cyan-900/50 disabled:cursor-not-allowed disabled:opacity-40"
+                title="Choose saved QR codes and print them again"
+              >
+                <Printer className="h-4 w-4" />
+                Show QR / Print Again
+              </button>
+            </div>
+
             {product.description && (
 
               <div className="mt-4 pt-4 border-t border-slate-800">
@@ -1847,7 +1989,7 @@ const Inventory = () => {
 
                 <h2 className="text-xl font-semibold text-black">
 
-                  {editingProduct ? 'Edit Shoe Product' : 'Add New Shoe Product'}
+                  {editingProduct ? 'Edit Shoe Product' : formMode === 'existingQr' ? 'Add Shoe Using Existing QR' : 'Add New Shoe Product'}
 
                 </h2>
 
@@ -1986,6 +2128,33 @@ const Inventory = () => {
                     </p>
 
                   </div>
+
+                  {formMode === 'existingQr' && !editingProduct && (
+                    <div className="md:col-span-2 rounded-xl border border-violet-500/40 bg-violet-950/20 p-4 space-y-3">
+                      <div>
+                        <h3 className="font-semibold text-slate-100">Add existing QR labels *</h3>
+                        <p className="mt-1 text-xs text-slate-400">Scan or paste the QR content already printed on each shoe. The original QR value is stored unchanged.</p>
+                      </div>
+                      <div className="flex flex-col gap-2 sm:flex-row">
+                        <input
+                          value={existingQrInput}
+                          onChange={(e) => setExistingQrInput(e.target.value)}
+                          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); queueExistingQrValue(existingQrInput); } }}
+                          placeholder="Scan or paste exact QR value"
+                          className="min-w-0 flex-1 rounded-lg border border-slate-700 bg-slate-950 px-3 py-3 text-slate-100 placeholder:text-slate-500"
+                        />
+                        <button type="button" onClick={() => queueExistingQrValue(existingQrInput)} className="rounded-lg border border-slate-600 px-4 py-3 hover:bg-slate-800">Add value</button>
+                        <button type="button" onClick={() => setShowQrScannerInForm(true)} className="inline-flex items-center justify-center gap-2 rounded-lg bg-violet-600 px-4 py-3 font-medium text-white hover:bg-violet-500"><Camera className="h-4 w-4" /> Scan QR</button>
+                      </div>
+                      {existingQrValues.length > 0 && (
+                        <div className="space-y-2">
+                          <div className="text-sm text-violet-300">{existingQrValues.length} QR value(s) queued</div>
+                          <ul className="max-h-28 space-y-1 overflow-y-auto">{existingQrValues.map((value, index) => <li key={`${value}-${index}`} className="flex items-start justify-between gap-2 rounded bg-slate-950/70 px-3 py-2 text-xs"><code className="break-all text-slate-300">{value}</code><button type="button" onClick={() => setExistingQrValues((current) => current.filter((entry) => entry !== value))} className="text-rose-300" aria-label="Remove QR value"><X className="h-4 w-4" /></button></li>)}</ul>
+                        </div>
+                      )}
+                      {existingQrMessage && <p role="status" className={`text-sm ${existingQrMessage.type === 'success' ? 'text-emerald-300' : 'text-rose-300'}`}>{existingQrMessage.text}</p>}
+                    </div>
+                  )}
 
                   <SuggestInput
 
@@ -2273,7 +2442,7 @@ const Inventory = () => {
 
                   <Zap className="w-4 h-4" />
 
-                  {editingProduct ? 'Update Product' : 'Add & Continue'}
+                  {editingProduct ? 'Update Product' : formMode === 'existingQr' ? 'Add QR' : 'Add & Continue'}
 
                 </button>
 
@@ -2427,6 +2596,58 @@ const Inventory = () => {
 
       )}
 
+      {/* Register existing QR codes without generating or rewriting their payloads */}
+      {showExistingQrModal && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/80 backdrop-blur-sm p-4">
+          <div className="w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-2xl border border-slate-700 bg-slate-900 text-slate-100 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-700 p-5">
+              <div>
+                <h2 className="text-xl font-semibold">Add Using Existing QR</h2>
+                <p className="mt-1 text-sm text-slate-400">Register QR labels already printed on your shoe stock. Their original values are preserved.</p>
+              </div>
+              <button type="button" onClick={() => { setShowExistingQrModal(false); setShowExistingQrScanner(false); }} className="rounded-lg p-2 hover:bg-slate-800" aria-label="Close"><X className="h-5 w-5" /></button>
+            </div>
+            <div className="space-y-5 p-5">
+              <div>
+                <label className="mb-2 block text-sm font-medium">Select shoe product *</label>
+                <select value={existingQrProductId} onChange={(e) => setExistingQrProductId(e.target.value)} className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-3 text-slate-100 outline-none focus:border-violet-500">
+                  <option value="">Choose a product</option>
+                  {products.map((product) => <option key={product.id} value={String(product.id)}>{product.name}{product.size ? ` · Size ${product.size}` : ''} · Stock: {product.stock}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="mb-2 block text-sm font-medium">QR value</label>
+                <div className="flex flex-col gap-2 sm:flex-row">
+                  <input value={existingQrInput} onChange={(e) => setExistingQrInput(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); queueExistingQrValue(existingQrInput); } }} placeholder="Scan or paste the exact QR content" className="min-w-0 flex-1 rounded-xl border border-slate-700 bg-slate-950 px-3 py-3 text-slate-100 outline-none focus:border-violet-500" />
+                  <button type="button" onClick={() => queueExistingQrValue(existingQrInput)} className="rounded-xl border border-slate-600 px-4 py-3 hover:bg-slate-800">Add value</button>
+                  <button type="button" onClick={() => setShowExistingQrScanner(true)} className="flex items-center justify-center gap-2 rounded-xl bg-violet-600 px-4 py-3 font-medium hover:bg-violet-500"><Camera className="h-4 w-4" /> Scan QR</button>
+                </div>
+                <p className="mt-2 text-xs text-slate-400">You can queue multiple QR labels before registering. Duplicate values already in inventory will be rejected.</p>
+              </div>
+              <div className="rounded-xl border border-slate-700 bg-slate-950/60 p-4">
+                <div className="mb-3 flex items-center justify-between"><span className="font-medium">QR values queued</span><span className="rounded-full bg-violet-500/15 px-2.5 py-1 text-sm text-violet-300">{existingQrValues.length + (String(existingQrInput || '').trim() && !existingQrValues.includes(String(existingQrInput).trim()) ? 1 : 0)}</span></div>
+                {existingQrValues.length === 0 && !String(existingQrInput || '').trim() ? <p className="text-sm text-slate-500">No QR values added yet.</p> : <ul className="max-h-36 space-y-2 overflow-y-auto text-sm">{[...existingQrValues, ...(String(existingQrInput || '').trim() && !existingQrValues.includes(String(existingQrInput).trim()) ? [String(existingQrInput).trim()] : [])].map((value, index) => <li key={`${value}-${index}`} className="flex items-start justify-between gap-3 rounded-lg bg-slate-900 px-3 py-2"><code className="break-all text-slate-300">{value}</code><button type="button" onClick={() => { setExistingQrValues((current) => current.filter((entry) => entry !== value)); if (existingQrInput.trim() === value) setExistingQrInput(''); }} className="shrink-0 text-rose-400 hover:text-rose-300" aria-label="Remove QR value"><X className="h-4 w-4" /></button></li>)}</ul>}
+              </div>
+              {existingQrMessage && <div role="status" className={`rounded-xl border p-3 text-sm ${existingQrMessage.type === 'success' ? 'border-emerald-700 bg-emerald-950/50 text-emerald-300' : 'border-rose-700 bg-rose-950/50 text-rose-300'}`}>{existingQrMessage.text}</div>}
+              <div className="flex flex-col-reverse justify-end gap-3 sm:flex-row">
+                <button type="button" onClick={() => { setShowExistingQrModal(false); setShowExistingQrScanner(false); }} className="rounded-xl border border-slate-600 px-5 py-3 hover:bg-slate-800">Close</button>
+                <button type="button" onClick={handleRegisterExistingQrs} className="rounded-xl bg-violet-600 px-5 py-3 font-semibold hover:bg-violet-500">Register QR and Update Stock</button>
+              </div>
+            </div>
+          </div>
+          <QrWebcamScanner open={showExistingQrScanner} onClose={() => setShowExistingQrScanner(false)} onDetected={(value) => { setShowExistingQrScanner(false); queueExistingQrValue(value); }} />
+        </div>
+      )}
+
+      <QrWebcamScanner
+        open={showQrScannerInForm}
+        onClose={() => setShowQrScannerInForm(false)}
+        onDetected={(value) => {
+          setShowQrScannerInForm(false);
+          queueExistingQrValue(value);
+        }}
+      />
+
       {/* Barcode Scanner Modal */}
 
       <BarcodeScanner
@@ -2468,36 +2689,65 @@ const Inventory = () => {
       />
 
       {showAddedProductPopup && lastAddedProduct && (
+
         <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/80 backdrop-blur-sm p-4">
+
           <div
+
             role="dialog"
+
             aria-modal="true"
+
             aria-labelledby="product-added-title"
+
             className="w-full max-w-md rounded-2xl border border-slate-700 bg-slate-900 p-6 shadow-2xl"
+
           >
+
             <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-emerald-950/70 text-emerald-300">
+
               <Package2 className="h-7 w-7" />
+
             </div>
+
             <h3 id="product-added-title" className="text-center text-xl font-bold text-white">
+
               Product added successfully
+
             </h3>
+
             <p className="mt-2 text-center text-sm text-slate-300">
+
               {lastAddedProduct.name}
+
             </p>
+
             <div className="mt-4 rounded-xl border border-slate-700 bg-slate-950/70 p-3 text-sm">
+
               <div className="flex justify-between gap-3">
+
                 <span className="text-slate-400">Stock added</span>
+
                 <span className="font-semibold text-white">{lastAddedProduct.stock} unit(s)</span>
+
               </div>
+
               <div className="mt-2 flex justify-between gap-3">
+
                 <span className="text-slate-400">Barcode / SKU</span>
+
                 <span className="max-w-[60%] break-all text-right font-mono text-slate-200">
+
                   {lastAddedProduct.barcode || '—'}
+
                 </span>
+
               </div>
+
             </div>
+
             <p className="mt-4 text-center text-sm text-slate-400">
-              Print a separate QR label for each available physical unit using your thermal label preview.
+              QR codes are generated for the available physical units. Preview and print their labels when needed.
             </p>
             <div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row">
               <button
@@ -2516,19 +2766,65 @@ const Inventory = () => {
                 className="flex-1 inline-flex items-center justify-center gap-2 rounded-lg bg-cyan-600 px-4 py-3 font-semibold text-white hover:bg-cyan-500"
               >
                 <QrCode className="h-4 w-4" />
-                Preview & Print QR
+                Generate QR / Print Labels
               </button>
+            </div>
+          </div>
+
+        </div>
+
+      )}
+
+      {qrSelectProduct && (
+        <div className="fixed inset-0 z-[85] flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-sm">
+          <div role="dialog" aria-modal="true" aria-labelledby="select-qr-title" className="max-h-[85vh] w-full max-w-2xl overflow-hidden rounded-2xl border border-slate-700 bg-slate-900 shadow-2xl">
+            <div className="flex items-start justify-between gap-4 border-b border-slate-800 p-5">
+              <div className="min-w-0">
+                <h2 id="select-qr-title" className="text-lg font-bold text-white">Select QR codes to print again</h2>
+                <p className="mt-1 break-words text-sm text-slate-400">{qrSelectProduct.name}{qrSelectProduct.size ? ` · Size ${qrSelectProduct.size}` : ''}</p>
+              </div>
+              <button type="button" onClick={() => { setQrSelectProduct(null); setSelectedQrUnitIds([]); }} className="rounded-lg p-2 text-slate-300 hover:bg-slate-800" aria-label="Close QR selection"><X className="h-5 w-5" /></button>
+            </div>
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 px-5 py-3">
+              <span className="text-sm text-slate-300">{selectedQrUnitIds.length} selected of {(qrSelectProduct.qrUnits || []).filter((unit) => unit.qrValue).length} saved QR code(s)</span>
+              <div className="flex gap-2">
+                <button type="button" onClick={() => setSelectedQrUnitIds((qrSelectProduct.qrUnits || []).filter((unit) => unit.qrValue).map((unit) => String(unit.unitId)))} className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-200 hover:bg-slate-800">Select all</button>
+                <button type="button" onClick={() => setSelectedQrUnitIds([])} className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-200 hover:bg-slate-800">Clear</button>
+              </div>
+            </div>
+            <div className="max-h-[50vh] overflow-y-auto p-5">
+              {(qrSelectProduct.qrUnits || []).filter((unit) => unit.qrValue).length === 0 ? (
+                <p className="rounded-xl border border-slate-800 bg-slate-950/60 p-4 text-sm text-slate-400">No saved QR codes are available for this product.</p>
+              ) : (
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  {(qrSelectProduct.qrUnits || []).filter((unit) => unit.qrValue).map((unit) => {
+                    const unitId = String(unit.unitId);
+                    const checked = selectedQrUnitIds.includes(unitId);
+                    return (
+                      <label key={unitId} className={`flex min-w-0 cursor-pointer items-start gap-3 rounded-xl border p-3 ${checked ? 'border-cyan-600 bg-cyan-950/30' : 'border-slate-800 bg-slate-950/50 hover:border-slate-700'}`}>
+                        <input type="checkbox" checked={checked} onChange={(event) => setSelectedQrUnitIds((current) => event.target.checked ? [...new Set([...current, unitId])] : current.filter((id) => id !== unitId))} className="mt-1" />
+                        <span className="min-w-0 flex-1">
+                          <span className="block break-all font-mono text-sm text-slate-100">{unit.unitId}</span>
+                          <span className="mt-1 block break-all text-xs text-slate-400">QR: {unit.qrValue}</span>
+                          <span className={`mt-1 inline-block rounded-full px-2 py-0.5 text-[10px] ${unit.status === 'available' ? 'bg-emerald-950 text-emerald-300' : 'bg-slate-800 text-slate-300'}`}>{unit.status || 'saved'}</span>
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+            <div className="flex flex-col-reverse gap-3 border-t border-slate-800 p-5 sm:flex-row sm:justify-end">
+              <button type="button" onClick={() => { setQrSelectProduct(null); setSelectedQrUnitIds([]); }} className="rounded-xl border border-slate-700 px-5 py-3 font-medium text-slate-200 hover:bg-slate-800">Cancel</button>
+              <button type="button" onClick={printSelectedQrUnits} disabled={selectedQrUnitIds.length === 0} className="inline-flex items-center justify-center gap-2 rounded-xl bg-cyan-600 px-5 py-3 font-semibold text-white hover:bg-cyan-500 disabled:cursor-not-allowed disabled:opacity-40"><Printer className="h-4 w-4" /> Print selected ({selectedQrUnitIds.length})</button>
             </div>
           </div>
         </div>
       )}
 
       <QrLabelPrint
-
         product={qrPrintProduct}
-
         onClose={() => setQrPrintProduct(null)}
-
       />
 
     </div>

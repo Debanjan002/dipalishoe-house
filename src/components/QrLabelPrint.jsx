@@ -35,43 +35,27 @@ export default function QrLabelPrint({ product, onClose }) {
       setError('The print window was blocked. Allow pop-ups for this site and try again.');
       return;
     }
-
-    // Each label prints on the same thermal roll. A separator follows each label
-    // (except the last one), with one blank line before the QR and after the details.
-    const labelMarkup = labels.map((unit, index) => `
+    const labelMarkup = labels.map((unit) => `
       <section class="label">
-        <div class="blank-line" aria-hidden="true">&nbsp;</div>
         <img class="qr" src="${unit.image}" alt="QR ${escapeHtml(unit.unitId)}" />
         <div class="name">${escapeHtml(product.name)}</div>
         <div>${escapeHtml(product.brand || '')}${product.size ? ` · Size ${escapeHtml(product.size)}` : ''}</div>
         <div class="price">₹${Number(product.price || 0).toLocaleString('en-IN')}</div>
         <div class="id">${escapeHtml(unit.unitId)}</div>
-        <div class="blank-line after-details" aria-hidden="true">&nbsp;</div>
-        ${index < labels.length - 1 ? '<div class="separator">****************************</div>' : '<h1 class="om-symbol">ॐ</h1>'}
       </section>`).join('');
-
     printWindow.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Shoe QR Labels</title><style>
       @page { size: 50mm auto; margin: 0; }
       * { box-sizing: border-box; }
       html, body { margin: 0; padding: 0; width: 50mm; color: #000; background: #fff; font-family: Arial, sans-serif; }
-      .label { width: 45mm; padding: 1mm 1mm 2mm; text-align: center; overflow: hidden; break-inside: avoid; page-break-inside: avoid; }
-      .blank-line { height: 3mm; line-height: 3mm; font-size: 1pt; }
+      .label { width: 45mm; min-height: 37mm; padding: 2mm 1mm 3mm; text-align: center; page-break-after: always; break-after: page; overflow: hidden; }
+      .label:last-child { page-break-after: auto; break-after: auto; }
       .qr { display: block; width: 24mm; height: 24mm; object-fit: contain; margin: 0 auto 1mm; image-rendering: pixelated; }
       .name { font-size: 9pt; font-weight: 700; line-height: 1.1; max-height: 8mm; overflow: hidden; }
       .label div { font-size: 7pt; line-height: 1.2; overflow-wrap: anywhere; }
       .price { font-weight: 700; font-size: 9pt !important; }
       .id { font-family: monospace; font-size: 6.5pt !important; margin-top: 1mm; }
-      .after-details { margin-top: 0; }
-      .separator { font-family: monospace; font-size: 7pt !important; letter-spacing: 0.1mm; white-space: nowrap; margin: 1mm 0 2mm; padding-top: 1mm; border-top: 0.2mm dashed #000; }
-      .om-symbol { margin: 2mm 0 0; font-size: 18pt; line-height: 1.2; font-weight: 700; }
       @media screen { body { width: 45mm; margin: 0 auto; } .label { border-bottom: 1px dashed #aaa; } }
-    </style></head><body>${labelMarkup}<script>
-      window.onload = () => {
-        const images = Array.from(document.images);
-        Promise.all(images.map(img => img.complete ? Promise.resolve() : new Promise(resolve => { img.onload = resolve; img.onerror = resolve; })))
-          .then(() => { window.focus(); window.print(); });
-      };
-    </script></body></html>`);
+    </style></head><body>${labelMarkup}<script>window.onload = () => { const images = Array.from(document.images); Promise.all(images.map(img => img.complete ? Promise.resolve() : new Promise(resolve => { img.onload = resolve; img.onerror = resolve; }))).then(() => { window.focus(); window.print(); }); };</script></body></html>`);
     printWindow.document.close();
   };
 

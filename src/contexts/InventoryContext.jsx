@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 
 const InventoryContext = createContext(null);
 const STORAGE_KEY = 'pos_products';
@@ -22,12 +22,13 @@ const makeUnitId = () => {
   return `SH-${random}`;
 };
 
-const createUnit = (productId, status = 'available') => {
+const createUnit = (productId, status = 'available', qrValue = null) => {
   const unitId = makeUnitId();
   return {
     unitId,
     productId: String(productId),
-    qrValue: `DSH1:${unitId}`,
+    // Keep a registered existing QR payload verbatim; generated units keep the legacy format.
+    qrValue: qrValue == null ? `DSH1:${unitId}` : String(qrValue),
     status,
     createdAt: new Date().toISOString(),
   };
@@ -38,7 +39,14 @@ const reconcileUnits = (product, priorUnits) => {
   const units = Array.isArray(priorUnits)
     ? priorUnits.map((unit) => {
         const unitId = String(unit.unitId || makeUnitId());
-        return { ...unit, unitId, productId: String(product.id), qrValue: unit.qrValue || `DSH1:${unitId}`, status: unit.status || 'available' };
+        return {
+          ...unit,
+          unitId,
+          productId: String(product.id),
+          // Do not rewrite existing QR payloads (including legacy or third-party QR formats).
+          qrValue: unit.qrValue == null || String(unit.qrValue) === '' ? `DSH1:${unitId}` : String(unit.qrValue),
+          status: unit.status || 'available',
+        };
       })
     : [];
 
@@ -81,10 +89,7 @@ const readProducts = () => {
     { id: '2', name: 'Nike Air Max Running Shoes', barcode: 'NIKE001', price: 4999, stock: 8, category: 'Sports', description: 'Comfortable running shoes with air cushioning', size: '9', brand: 'Nike' },
     { id: '3', name: 'Woodland Casual Brown Shoes', barcode: 'WOOD001', price: 3299, stock: 12, category: "Men's Casual", description: 'Genuine leather casual shoes', size: '7', brand: 'Woodland' },
   ];
-  return sampleProducts.map((product) => ({
-    ...product,
-    qrUnits: reconcileUnits(product, []),
-  }));
+  return sampleProducts.map((product) => ({ ...product, qrUnits: reconcileUnits(product, []) }));
 };
 
 export const useInventory = () => {
@@ -95,7 +100,21 @@ export const useInventory = () => {
 
 export const InventoryProvider = ({ children }) => {
   const [products, setProducts] = useState(() => readProducts());
+  const productsRef = useRef(products);
   const [categories] = useState(DEFAULT_CATEGORIES);
+
+  // Keep a synchronous snapshot so Add Using QR can create a product and register its
+  // scanned QR payloads in the same submit event, before React re-renders.
+  const commitProducts = (updater) => {
+    const next = typeof updater === 'function' ? updater(productsRef.current) : updater;
+    productsRef.current = next;
+    setProducts(next);
+    return next;
+  };
+
+  useEffect(() => {
+    productsRef.current = products;
+  }, [products]);
 
   useEffect(() => {
     try {
@@ -112,14 +131,28 @@ export const InventoryProvider = ({ children }) => {
       ...product,
       id,
       stock,
-      qrUnits: reconcileUnits({ ...product, id, stock }, Array.isArray(product.qrUnits) ? product.qrUnits.map((unit) => ({ ...unit, unitId: undefined, qrValue: undefined, status: 'available' })) : []),
+      // Preserve the original Add Product workflow: new stock gets generated DSH1 unit labels.
+      qrUnits: reconcileUnits(
+        { ...product, id, stock },
+        Array.isArray(product.qrUnits)
+          ? product.qrUnits.map((unit) => ({
+              ...unit,
+              unitId: unit.unitId || makeUnitId(),
+              productId: id,
+              qrValue: unit.qrValue == null || String(unit.qrValue) === ''
+                ? `DSH1:${unit.unitId || makeUnitId()}`
+                : String(unit.qrValue),
+              status: unit.status || 'available',
+            }))
+          : [],
+      ),
     };
-    setProducts((current) => [...current, newProduct]);
+    commitProducts((current) => [...current, newProduct]);
     return newProduct;
   };
 
   const updateProduct = (id, updatedProduct) => {
-    setProducts((current) => current.map((product) => {
+    commitProducts((current) => current.map((product) => {
       if (String(product.id) !== String(id)) return product;
       const merged = { ...product, ...updatedProduct, id: String(id), stock: safeNumber(updatedProduct.stock ?? product.stock) };
       return { ...merged, qrUnits: reconcileUnits(merged, product.qrUnits) };
@@ -127,13 +160,50 @@ export const InventoryProvider = ({ children }) => {
   };
 
   const deleteProduct = (id) => {
-    setProducts((current) => current.filter((product) => String(product.id) !== String(id)));
+    commitProducts((current) => current.filter((product) => String(product.id) !== String(id)));
+  };
+
+  /** Register scanned/pre-existing QR payloads without changing their payload values. */
+  const registerExistingQrUnits = (productId, qrValues) => {
+    const product = productsRef.current.find((entry) => String(entry.id) === String(productId));
+    if (!product) return { success: false, added: 0, duplicates: [], error: 'Please select a valid product.' };
+
+    const values = (Array.isArray(qrValues) ? qrValues : [qrValues])
+      .map((value) => String(value ?? '').trim())
+      .filter(Boolean);
+    if (!values.length) return { success: false, added: 0, duplicates: [], error: 'Scan or enter at least one QR code.' };
+
+    const allUnits = productsRef.current.flatMap((entry) => entry.qrUnits || []);
+    const existingValues = new Set(allUnits.map((unit) => String(unit.qrValue ?? '')));
+    const seenInBatch = new Set();
+    const accepted = [];
+    const duplicates = [];
+    values.forEach((value) => {
+      if (existingValues.has(value) || seenInBatch.has(value)) duplicates.push(value);
+      else { accepted.push(value); seenInBatch.add(value); }
+    });
+    if (!accepted.length) {
+      return { success: false, added: 0, duplicates, error: 'These QR values are already registered. No stock was changed.' };
+    }
+
+    const now = new Date().toISOString();
+    const newUnits = accepted.map((value) => ({ ...createUnit(product.id, 'available', value), registeredAt: now, qrSource: 'existing' }));
+    commitProducts((current) => current.map((entry) => {
+      if (String(entry.id) !== String(productId)) return entry;
+      const currentUnits = Array.isArray(entry.qrUnits) ? entry.qrUnits : [];
+      return {
+        ...entry,
+        stock: safeNumber(entry.stock) + newUnits.length,
+        qrUnits: [...currentUnits, ...newUnits],
+      };
+    }));
+    return { success: true, added: newUnits.length, duplicates, units: newUnits };
   };
 
   // soldUnitIds/returnedUnitIds allow POS checkout and returns to preserve each physical unit's identity.
   const updateStock = (id, requestedStock, options = {}) => {
     const nextStock = safeNumber(requestedStock);
-    setProducts((current) => current.map((product) => {
+    commitProducts((current) => current.map((product) => {
       if (String(product.id) !== String(id)) return product;
       const previousStock = safeNumber(product.stock);
       let units = [...(product.qrUnits || [])];
@@ -191,14 +261,16 @@ export const InventoryProvider = ({ children }) => {
         }
       }
 
-      // Keep aggregate stock and the count of available units aligned, including older records.
       units = reconcileUnits({ ...product, stock: nextStock }, units);
       return { ...product, stock: nextStock, qrUnits: units };
     }));
   };
 
   const getLowStockProducts = () => products.filter((product) => product.stock <= 2);
-  const value = useMemo(() => ({ products, categories, addProduct, updateProduct, deleteProduct, updateStock, getLowStockProducts }), [products, categories]);
+  const value = useMemo(() => ({
+    products, categories, addProduct, updateProduct, deleteProduct, updateStock,
+    registerExistingQrUnits, getLowStockProducts,
+  }), [products, categories]);
 
   return <InventoryContext.Provider value={value}>{children}</InventoryContext.Provider>;
 };

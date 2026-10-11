@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useInventory } from '../contexts/InventoryContext';
 import { useSettings } from '../contexts/SettingsContext';
 import { useAuth } from '../contexts/AuthContext';
@@ -330,7 +330,22 @@ const POS = () => {
     // The scanned code is still processed below and the product is added to the cart.
     setShowScanModal(false);
 
-    // New shoe labels encode a unique unit, e.g. DSH1:SH-ABC123.
+    // 1) Match the exact stored QR payload first. This supports pre-existing QR labels
+    // regardless of whether their content is DSH1, a URL, or another legacy value.
+    const exactMatch = products.map((product) => ({
+      product,
+      unit: (product.qrUnits || []).find((entry) => String(entry.qrValue ?? '') === scanned),
+    })).find((match) => match.unit);
+    if (exactMatch) {
+      if (exactMatch.unit.status !== 'available') {
+        alert(`This shoe unit is already ${exactMatch.unit.status || 'unavailable'}: ${exactMatch.unit.unitId}`);
+        return;
+      }
+      addToCart(exactMatch.product, String(exactMatch.unit.unitId));
+      return;
+    }
+
+    // 2) Backward compatibility for DSH1 unit QR labels in older inventory records.
     const qrMatch = scanned.match(/^DSH1:(SH-[A-Z0-9-]+)$/i);
     if (qrMatch) {
       const unitId = qrMatch[1].toUpperCase();
@@ -348,7 +363,7 @@ const POS = () => {
       return;
     }
 
-    // Keep support for existing product barcode values if a QR encodes the old barcode.
+    // 3) Keep support for existing product barcode values if a QR encodes the old barcode.
     const val = norm(scanned);
     const prod = products.find((p) => norm(p.barcode) === val);
     if (prod) {
