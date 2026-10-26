@@ -21,6 +21,10 @@ export default function QrWebcamScanner({ open, onClose, onDetected, onQuantitie
   const isAlreadyRegisteredRef = useRef(isAlreadyRegistered);
   const duplicateWarningRef = useRef(new Map());
   const pauseScanningUntilRef = useRef(0);
+  // A repeated value counts as another unit only after the QR leaves the camera view
+  // and is presented again, avoiding quantity inflation while a label stays in frame.
+  const lastSuccessfulValueRef = useRef(null);
+  const emptyFramesRef = useRef(0);
   const stopCameraRef = useRef(() => {});
   const audioContextRef = useRef(null);
 
@@ -134,6 +138,8 @@ export default function QrWebcamScanner({ open, onClose, onDetected, onQuantitie
     seenCodesRef.current = new Set();
     duplicateWarningRef.current = new Map();
     pauseScanningUntilRef.current = 0;
+    lastSuccessfulValueRef.current = null;
+    emptyFramesRef.current = 0;
     setScannedCodes([]);
     setError('');
     setCameraReady(false);
@@ -179,32 +185,51 @@ export default function QrWebcamScanner({ open, onClose, onDetected, onQuantitie
         const value = result?.data?.trim();
 
         if (value) {
-          if (seenCodesRef.current.has(value)) {
+          emptyFramesRef.current = 0;
+          const isSameLabelStillInView = lastSuccessfulValueRef.current === value;
+
+          if (isSameLabelStillInView) {
+            // The same label is still in view after the pause: warn, but do not add units.
             warnDuplicate(value, 'QR already scanned');
+          } else if (seenCodesRef.current.has(value)) {
+            // This QR was scanned earlier and has now been presented again.
+            // Increase the quantity instead of creating a second preview row.
+            lastSuccessfulValueRef.current = value;
+            updateScannedCodes((current) => current.map((item) =>
+              item.value === value ? { ...item, quantity: Math.min(9999, item.quantity + 1) } : item
+            ));
+            warnDuplicate(value, 'QR already scanned');
+            if (continuousRef.current) pauseScanningUntilRef.current = Date.now() + 1000;
           } else {
             const alreadyRegistered = Boolean(isAlreadyRegisteredRef.current?.(value));
+            seenCodesRef.current.add(value);
+            lastSuccessfulValueRef.current = value;
+            updateScannedCodes((current) => [...current, { value, quantity: 1 }]);
+
             if (alreadyRegistered) {
-              seenCodesRef.current.add(value);
-              updateScannedCodes((current) => [...current, { value, quantity: 1 }]);
               warnDuplicate(value, 'QR already registered');
             } else {
-              seenCodesRef.current.add(value);
-              updateScannedCodes((current) => [...current, { value, quantity: 1 }]);
               playScanSound();
               onDetectedRef.current?.(value);
-
-              if (continuousRef.current) {
-                // Prevent the next label from being picked up immediately; camera stays active.
-                pauseScanningUntilRef.current = Date.now() + 1000;
-              }
-
-              if (!continuousRef.current) {
-                singleScanHandled = true;
-                stopCamera();
-                onCloseRef.current?.();
-                return;
-              }
             }
+
+            if (continuousRef.current) {
+              // Keep the camera open and pause recognition briefly before the next label.
+              pauseScanningUntilRef.current = Date.now() + 1000;
+            }
+
+            if (!continuousRef.current) {
+              singleScanHandled = true;
+              stopCamera();
+              onCloseRef.current?.();
+              return;
+            }
+          }
+        } else {
+          // Require several blank frames before the same physical label can count again.
+          emptyFramesRef.current += 1;
+          if (emptyFramesRef.current >= 5) {
+            lastSuccessfulValueRef.current = null;
           }
         }
       }

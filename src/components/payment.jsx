@@ -998,7 +998,24 @@ const Payment = ({
 
 
 
-  const handleConfirm = () => {
+  const handlePayTypeChange = (nextPayType) => {
+    setPayType(nextPayType);
+
+    if (nextPayType === 'DUE') {
+      // DUE starts with zero upfront payment; users can still edit these amounts.
+      setCashAmt('0');
+      setUpiAmt('0');
+      setShowUpiQR(false);
+      setQrError('');
+    } else {
+      setCashAmt(totals.total.toFixed(2));
+      setUpiAmt('');
+      setShowUpiQR(false);
+      setQrError('');
+    }
+  };
+
+  const handleConfirm = () => {
 
 
 
@@ -1094,7 +1111,30 @@ const Payment = ({
 
 
 
-  if (!open) return null;
+  useEffect(() => {
+    if (!open) return;
+
+    const handlePaymentEnter = (event) => {
+      if (
+        event.key !== 'Enter' ||
+        event.ctrlKey ||
+        event.altKey ||
+        event.metaKey ||
+        event.shiftKey
+      ) return;
+
+      const tagName = event.target?.tagName?.toUpperCase();
+      if (tagName === 'SELECT' || tagName === 'TEXTAREA') return;
+
+      event.preventDefault();
+      handleConfirm();
+    };
+
+    window.addEventListener('keydown', handlePaymentEnter);
+    return () => window.removeEventListener('keydown', handlePaymentEnter);
+  }, [open, canConfirm, submitting, parsedUpi, showUpiQR, errors, cashAmt, upiAmt, customerName, payType, totals.total]);
+
+  if (!open) return null;
 
 
 
@@ -1554,7 +1594,7 @@ const Payment = ({
 
 
 
-                    onChange={(e) => setPayType(e.target.value)}
+                    onChange={(e) => handlePayTypeChange(e.target.value)}
 
 
 

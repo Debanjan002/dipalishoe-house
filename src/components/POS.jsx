@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useInventory } from '../contexts/InventoryContext';
 import { useSettings } from '../contexts/SettingsContext';
 import { useAuth } from '../contexts/AuthContext';
@@ -35,6 +35,8 @@ const POS = () => {
   const [showDues, setShowDues] = useState(false);
   const [showPayment, setShowPayment] = useState(false);
   const [showScanModal, setShowScanModal] = useState(false);
+  // Tracks cumulative scanner preview quantities so each newly scanned unit is added once.
+  const processedScanQuantitiesRef = useRef({});
 
   // Cash expense modal
   const [showExpenseModal, setShowExpenseModal] = useState(false);
@@ -322,14 +324,38 @@ const POS = () => {
     }
   };
 
+  const handleScannerQuantitiesChange = (items) => {
+    if (!Array.isArray(items)) return;
+    const nextCounts = {};
+    const previousCounts = processedScanQuantitiesRef.current;
+
+    items.forEach((item) => {
+      const value = String(item?.value ?? '').trim();
+      const quantity = Math.max(0, Number.parseInt(item?.quantity, 10) || 0);
+      if (!value || quantity <= 0) return;
+
+      nextCounts[value] = quantity;
+      const previousQuantity = Math.max(0, Number.parseInt(previousCounts[value], 10) || 0);
+      const addedScans = Math.max(0, quantity - previousQuantity);
+
+      for (let index = 0; index < addedScans; index += 1) {
+        handleScanDetected(value);
+      }
+    });
+
+    processedScanQuantitiesRef.current = nextCounts;
+  };
+
+  const openPosQrScanner = () => {
+    processedScanQuantitiesRef.current = {};
+    setShowScanModal(true);
+  };
+
   const handleScanDetected = (code) => {
     const scanned = String(code || '').trim();
     if (!scanned) return;
 
-    // Close the scanner preview immediately after the first non-empty scan.
-    // The scanned code is still processed below and the product is added to the cart.
-    setShowScanModal(false);
-
+    // Keep the scanner open so repeated scans can increase cart quantity.
     // 1) Match the exact stored QR payload first. This supports pre-existing QR labels
     // regardless of whether their content is DSH1, a URL, or another legacy value.
     // A QR payload may be shared by multiple physical boxes. Each box has its own
@@ -341,7 +367,10 @@ const POS = () => {
         .map((unit) => ({ product, unit }))
     );
     if (exactMatches.length) {
-      const availableMatch = exactMatches.find(({ unit }) => unit.status === 'available');
+      const alreadySelectedUnitIds = new Set(cart.flatMap((item) => (item.unitIds || []).map(String)));
+      const availableMatch = exactMatches.find(({ unit }) =>
+        unit.status === 'available' && !alreadySelectedUnitIds.has(String(unit.unitId))
+      );
       if (!availableMatch) {
         const statuses = [...new Set(exactMatches.map(({ unit }) => unit.status || 'unavailable'))];
         alert(`No available shoe units remain for this QR. Status: ${statuses.join(', ')}.`);
@@ -654,6 +683,7 @@ const POS = () => {
 </head>
 <body class="bottom-space">
   <div class="center">
+    ${shopSettings?.logo ? `<img src="${shopSettings.logo}" alt="Shop Logo" style="max-width: 40mm; max-height: 22mm; object-fit: contain; height: auto; display: block; margin: 0 auto 5px auto; border-radius: 3px;" />` : ''}
     <div class="header">${shopSettings?.name || ''}</div>
     <div class="sub">${shopSettings?.address || ''}</div>
     <div class="sub">Ph: ${shopSettings?.phone || ''}</div>
@@ -729,7 +759,6 @@ const POS = () => {
 
   <div class="rule"></div>
   <div class="center">
-    ${shopSettings?.logo ? `<img src="${shopSettings.logo}" alt="Shop Logo" style="max-width: 40mm; height: auto; display: block; margin: 0 auto 5px auto; border-radius: 3px;" />` : ''}
   </div>
   <div class="center">!!SCAN TO select Your shoe Online!!</div>
   <div class="center sub no-break">
@@ -745,7 +774,14 @@ const POS = () => {
     w.document.write(receiptHTML);
     w.document.close();
     w.focus();
-    setTimeout(() => w.print(), 400);
+    const printWhenReady = () => {
+      const images = Array.from(w.document.images);
+      Promise.all(images.map((img) => img.complete ? Promise.resolve() : new Promise((resolve) => {
+        img.onload = resolve;
+        img.onerror = resolve;
+      }))).then(() => setTimeout(() => w.print(), 150));
+    };
+    setTimeout(printWhenReady, 100);
   };
   // ===== PROCESS SALE (called by Payment modal) =====
   const processSale = ({ payType, payments = [], amountPaid, customerName }) => {
@@ -1217,6 +1253,32 @@ const POS = () => {
   useEffect(() => {
     if (showExpenseModal) refreshTodayExpenses();
   }, [showExpenseModal]);
+
+  useEffect(() => {
+    const handleCartPaymentShortcut = (event) => {
+      if (
+        event.key === 'Enter' &&
+        event.ctrlKey &&
+        !event.altKey &&
+        !event.metaKey &&
+        !showPayment &&
+        !showScanModal &&
+        !showDirectBill &&
+        !showReturns &&
+        !showDues &&
+        !showExpenseModal &&
+        !showDiscountModal &&
+        cart.length > 0
+      ) {
+        event.preventDefault();
+        setShowPayment(true);
+      }
+    };
+
+    window.addEventListener('keydown', handleCartPaymentShortcut);
+    return () => window.removeEventListener('keydown', handleCartPaymentShortcut);
+  }, [cart.length, showPayment, showScanModal, showDirectBill, showReturns, showDues, showExpenseModal, showDiscountModal]);
+
   return (
     <div className="min-h-screen space-y-5 bg-[#0b1120] p-3 text-slate-100 sm:p-5 lg:p-7">
       <div className="flex flex-col gap-4 rounded-2xl border border-slate-800/80 bg-slate-900/60 px-5 py-5 shadow-sm md:flex-row md:items-center md:justify-between">
@@ -1282,7 +1344,7 @@ const POS = () => {
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 <button
-                  onClick={() => setShowScanModal(true)}
+                  onClick={openPosQrScanner}
                   className="inline-flex items-center gap-2 rounded-xl border border-cyan-300/20 bg-cyan-500 px-4 py-3 text-sm font-semibold text-slate-950 transition hover:bg-cyan-400"
                 >
                   <Camera className="w-4 h-4" /> Scan
@@ -2051,7 +2113,8 @@ const POS = () => {
       <QrWebcamScanner
         open={showScanModal}
         onClose={() => setShowScanModal(false)}
-        onDetected={handleScanDetected}
+        onQuantitiesChange={handleScannerQuantitiesChange}
+        continuous={true}
       />
 
     </div>

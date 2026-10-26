@@ -601,8 +601,13 @@ const Inventory = () => {
   const queueExistingQrValue = (rawValue) => {
     const value = String(rawValue ?? '').trim();
     if (!value) return;
+
+    // A repeated manual entry means another physical unit with the same QR payload.
     setExistingQrValues((current) => current.includes(value) ? current : [...current, value]);
-    setExistingQrQuantities((current) => ({ ...current, [value]: Math.max(1, Number(current[value]) || 1) }));
+    setExistingQrQuantities((current) => ({
+      ...current,
+      [value]: current[value] ? Math.min(9999, Number(current[value]) + 1) : 1
+    }));
     setExistingQrInput('');
     setExistingQrMessage(null);
   };
@@ -610,12 +615,19 @@ const Inventory = () => {
   // Keep the scanner preview quantities synchronized with the inventory registration queue.
   const syncScannedQrQuantities = (items) => {
     if (!Array.isArray(items)) return;
-    setExistingQrValues((current) => [...new Set([...current, ...items.map((item) => String(item?.value ?? '').trim()).filter(Boolean)])]);
+    const cleanItems = items
+      .map((item) => ({
+        value: String(item?.value ?? '').trim(),
+        quantity: Math.max(1, Math.min(9999, Number.parseInt(item?.quantity, 10) || 1))
+      }))
+      .filter((item) => item.value);
+
+    setExistingQrValues((current) => [...new Set([...current, ...cleanItems.map((item) => item.value)])]);
     setExistingQrQuantities((current) => {
       const next = { ...current };
-      items.forEach((item) => {
-        const value = String(item?.value ?? '').trim();
-        if (value) next[value] = Math.max(1, Number.parseInt(item.quantity, 10) || 1);
+      cleanItems.forEach(({ value, quantity }) => {
+        // Scanner preview is authoritative for values scanned in this session.
+        next[value] = quantity;
       });
       return next;
     });
@@ -2169,7 +2181,7 @@ const Inventory = () => {
                       {existingQrValues.length > 0 && (
                         <div className="space-y-2">
                           <div className="text-sm text-violet-300">{existingQrValues.length} QR value(s) queued</div>
-                          <ul className="max-h-28 space-y-1 overflow-y-auto">{existingQrValues.map((value, index) => <li key={`${value}-${index}`} className="flex items-start justify-between gap-2 rounded bg-slate-950/70 px-3 py-2 text-xs"><code className="break-all text-slate-300">{value}</code><button type="button" onClick={() => setExistingQrValues((current) => current.filter((entry) => entry !== value))} className="text-rose-300" aria-label="Remove QR value"><X className="h-4 w-4" /></button></li>)}</ul>
+                          <ul className="max-h-28 space-y-1 overflow-y-auto">{existingQrValues.map((value, index) => <li key={`${value}-${index}`} className="flex items-start justify-between gap-2 rounded bg-slate-950/70 px-3 py-2 text-xs"><div className="min-w-0"><code className="break-all text-slate-300">{value}</code><div className="mt-1 text-xs text-violet-300">Quantity: {Math.max(1, Number.parseInt(existingQrQuantities[value], 10) || 1)}</div></div><button type="button" onClick={() => { setExistingQrValues((current) => current.filter((entry) => entry !== value)); setExistingQrQuantities((current) => { const next = { ...current }; delete next[value]; return next; }); }} className="text-rose-300" aria-label="Remove QR value"><X className="h-4 w-4" /></button></li>)}</ul>
                         </div>
                       )}
                       {existingQrMessage && <p role="status" className={`text-sm ${existingQrMessage.type === 'success' ? 'text-emerald-300' : 'text-rose-300'}`}>{existingQrMessage.text}</p>}
@@ -2643,8 +2655,8 @@ const Inventory = () => {
                 <p className="mt-2 text-xs text-slate-400">You can queue multiple QR labels before registering. Duplicate values already in inventory will be rejected.</p>
               </div>
               <div className="rounded-xl border border-slate-700 bg-slate-950/60 p-4">
-                <div className="mb-3 flex items-center justify-between"><span className="font-medium">QR values queued</span><span className="rounded-full bg-violet-500/15 px-2.5 py-1 text-sm text-violet-300">{existingQrValues.length + (String(existingQrInput || '').trim() && !existingQrValues.includes(String(existingQrInput).trim()) ? 1 : 0)}</span></div>
-                {existingQrValues.length === 0 && !String(existingQrInput || '').trim() ? <p className="text-sm text-slate-500">No QR values added yet.</p> : <ul className="max-h-36 space-y-2 overflow-y-auto text-sm">{[...existingQrValues, ...(String(existingQrInput || '').trim() && !existingQrValues.includes(String(existingQrInput).trim()) ? [String(existingQrInput).trim()] : [])].map((value, index) => <li key={`${value}-${index}`} className="flex items-start justify-between gap-3 rounded-lg bg-slate-900 px-3 py-2"><code className="break-all text-slate-300">{value}</code><button type="button" onClick={() => { setExistingQrValues((current) => current.filter((entry) => entry !== value)); if (existingQrInput.trim() === value) setExistingQrInput(''); }} className="shrink-0 text-rose-400 hover:text-rose-300" aria-label="Remove QR value"><X className="h-4 w-4" /></button></li>)}</ul>}
+                <div className="mb-3 flex items-center justify-between"><span className="font-medium">QR values queued</span><span className="rounded-full bg-violet-500/15 px-2.5 py-1 text-sm text-violet-300">{existingQrValues.reduce((total, value) => total + Math.max(1, Number.parseInt(existingQrQuantities[value], 10) || 1), 0) + (String(existingQrInput || '').trim() && !existingQrValues.includes(String(existingQrInput).trim()) ? 1 : 0)} unit(s)</span></div>
+                {existingQrValues.length === 0 && !String(existingQrInput || '').trim() ? <p className="text-sm text-slate-500">No QR values added yet.</p> : <ul className="max-h-36 space-y-2 overflow-y-auto text-sm">{[...existingQrValues, ...(String(existingQrInput || '').trim() && !existingQrValues.includes(String(existingQrInput).trim()) ? [String(existingQrInput).trim()] : [])].map((value, index) => <li key={`${value}-${index}`} className="flex items-start justify-between gap-3 rounded-lg bg-slate-900 px-3 py-2"><div className="min-w-0"><code className="break-all text-slate-300">{value}</code><div className="mt-1 text-xs text-violet-300">Quantity: {Math.max(1, Number.parseInt(existingQrQuantities[value], 10) || 1)}</div></div><button type="button" onClick={() => { setExistingQrValues((current) => current.filter((entry) => entry !== value)); setExistingQrQuantities((current) => { const next = { ...current }; delete next[value]; return next; }); if (existingQrInput.trim() === value) setExistingQrInput(''); }} className="shrink-0 text-rose-400 hover:text-rose-300" aria-label="Remove QR value"><X className="h-4 w-4" /></button></li>)}</ul>}
               </div>
               {existingQrMessage && <div role="status" className={`rounded-xl border p-3 text-sm ${existingQrMessage.type === 'success' ? 'border-emerald-700 bg-emerald-950/50 text-emerald-300' : 'border-rose-700 bg-rose-950/50 text-rose-300'}`}>{existingQrMessage.text}</div>}
               <div className="flex flex-col-reverse justify-end gap-3 sm:flex-row">
